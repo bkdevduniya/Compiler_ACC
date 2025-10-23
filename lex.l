@@ -107,8 +107,8 @@ WS       [ \t\r]*
 ":"         { return COLON; }
 ","         { return COMMA; }
 
-"std::cin"  { return STD_CIN; }
-"std::cout" { return STD_COUT; }
+"cin"  { return STD_CIN; }
+"cout" { return STD_COUT; }
 "endl"      { return STD_ENDL; }
 
 "va_start"  { return VA_START; }
