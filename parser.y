@@ -59,7 +59,9 @@ typedef enum {
     NODE_FOR_INIT,
     NODE_EXPR_OPT,
     NODE_INITIALIZER,
-    NODE_VA_LIST
+    NODE_VA_LIST,
+    NODE_COUT_STMT,
+    NODE_CIN_STMT
 } NodeType;
 
 typedef struct ASTNode {
@@ -186,6 +188,8 @@ const char* node_type_to_string(NodeType type) {
         case NODE_EXPR_OPT: return "EXPR_OPT";
         case NODE_INITIALIZER: return "INITIALIZER";
         case NODE_VA_LIST: return "VA_LIST";
+        case NODE_COUT_STMT: return "COUT_STMT";
+        case NODE_CIN_STMT: return "CIN_STMT";
         default: return "UNKNOWN";
     }
 }
@@ -205,6 +209,10 @@ void print_ast(ASTNode *node, int depth) {
     print_ast(node->left, depth + 1);
     print_ast(node->right, depth + 1);
     print_ast(node->next, depth);
+}
+
+void check_semantics(ASTNode *node, int depth){
+
 }
 
 void free_ast(ASTNode *node) {
@@ -287,7 +295,7 @@ ASTNode *ast_root = NULL;
 %type <ast> lambda_params lambda_ret params_opt param_list_dec param_decl
 %type <ast> compound_stmt stmt_list statement case_blocks_opt case_blocks case_block
 %type <ast> for_init_opt expression_opt initializer init_list args_opt args_list literal srtuct_ident
-%type <ast> else_part
+%type <ast> else_part cout_stmt cin_stmt
 
 %start program
 
@@ -327,7 +335,7 @@ srtuct_ident
 }
 ;
 
-/* ---------------- Struct definition ---------------- */
+/*---------------- Struct definition ----------------*/
 struct_def
     : srtuct_ident IDENTIFIER LBRACE struct_member_list RBRACE SEMI {
         ASTNode *struct_node = create_ast_node(NODE_STRUCT_DEF,line_val, $2);
@@ -443,7 +451,7 @@ declaration
     }
     ;
 
-/* ---------------- Declarators ---------------- */
+/*---------------- Declarators ----------------*/
 declarator
     : IDENTIFIER { 
         $$ = create_ast_node(NODE_IDENTIFIER, line_val, $1);
@@ -547,7 +555,7 @@ type
     ;
 
 /* ---------------- Functions ---------------- */
-/* ---------------- Functions ---------------- */
+
 function_dec
     : type declarator LPAREN params_opt RPAREN SEMI {
         ASTNode *func = create_ast_node(NODE_FUNCTION_DECL, line_val, NULL);
@@ -693,11 +701,30 @@ else_part
     }
     ;
 
+/* ---------------- Cout and Cin Statements ---------------- */
+cout_stmt
+    : STD_COUT LPAREN args_opt RPAREN SEMI {
+        ASTNode *cout_node = create_ast_node(NODE_COUT_STMT, line_val, NULL);
+        ast_add_child(cout_node, $3);
+        $$ = cout_node;
+    }
+    ;
+
+cin_stmt
+    : STD_CIN LPAREN args_opt RPAREN SEMI {
+        ASTNode *cin_node = create_ast_node(NODE_CIN_STMT, line_val, NULL);
+        ast_add_child(cin_node, $3);
+        $$ = cin_node;
+    }
+    ;
+
 /* ---------------- Statements ---------------- */
 statement
     : expression SEMI { $$ = $1; }
     | declaration { $$ = $1; }
     | compound_stmt { $$ = $1; }
+    | cout_stmt { $$ = $1; }
+    | cin_stmt { $$ = $1; }
     | IF LPAREN expression RPAREN statement else_part {
         ASTNode *if_node = create_ast_node(NODE_IF_STMT,line_val, NULL);
         ast_add_child(if_node, $3);  // condition
