@@ -50,8 +50,8 @@ WS       [ \t\r]*
 "auto"      { return AUTO; }
 "struct"    { return STRUCT; }
 "string"    { return STRING; }
-"class"     { return CLASS; }
-"enum"      { return ENUM; }
+"true"      {return TRUE;}
+"false"     {return FALSE;}
 
 "=="        { return EQ; }
 "!="        { return NEQ; }
@@ -114,6 +114,8 @@ WS       [ \t\r]*
 "va_start"  { return VA_START; }
 "va_arg"    { return VA_ARG; }
 "va_end"    { return VA_END; }
+
+
 
 
 {DIGIT}+[uU]?[lL]?[lL]? {
