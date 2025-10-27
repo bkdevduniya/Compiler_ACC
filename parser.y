@@ -1972,7 +1972,7 @@ case NODE_VARIABLE_DECL: {
                         }
                     }
                 }
-
+              if(init_expr->type!=NODE_INIT_LIST){
                 if(is_array && array_dimensions>0 && (!init_expr->is_array||init_expr->array_dimensions==0) && (!init_expr->is_pointer||init_expr->pointer_depth==0)){
                     printf("Semantic Error : invalid assignment to pointer '%s' \n",identifier);
                 }
@@ -1988,6 +1988,7 @@ case NODE_VARIABLE_DECL: {
                  else if(init_expr->is_pointer && init_expr->pointer_depth>0 && (!is_array||array_dimensions==0) && (!is_pointer||pointer_depth==0)){
                     printf("Semantic Error : invalid assignment of pointer '%s' \n",identifier);
                 }
+              }
             }
             
             // NOW SET ALL AST FIELDS AFTER ANALYSIS
@@ -2803,10 +2804,15 @@ case NODE_CALL: {
                 
                 // Handle address-of operator (&)
                 else if (node->op && strcmp(node->op, "&") == 0) {
-                    if (!node->left->is_pointer) {
+                    if (!node->left->is_array||(node->left->is_array&&node->left->array_dimensions>0)) {
                         node->is_pointer = true;
                         node->pointer_depth = node->left->pointer_depth + 1;
-                    } else {
+                    }
+                    else if (!node->left->is_pointer||(node->left->is_pointer&&node->left->pointer_depth>0)) {
+                        node->is_pointer = true;
+                        node->pointer_depth = node->left->pointer_depth + 1;
+                    }
+                    else if(node->left->type!=  NODE_IDENTIFIER ){
                         printf("Semantic Error at line %d: Cannot take address of pointer '%s'\n", 
                                node->line_number, node->left->value ? node->left->value : "");
                     }
@@ -3201,8 +3207,10 @@ case NODE_COMPOUND_STMT:{
     if(last->next){
         scope_start_ptr=last->next;
     }
+    
     break;
     }
+
  case NODE_TERNARY_OP: {
             check_semantics(node->child, parent_scope);  // condition
             check_semantics(node->left, parent_scope);   // then expr
@@ -3364,7 +3372,8 @@ case NODE_INDEX: {
                     // Handle pointer conversion for arrays (array decay to pointer)
                     if (node->child->is_array && !node->child->is_pointer) {
                         node->is_pointer = true;
-                        node->pointer_depth = 1;
+                        node->pointer_depth = node->array_dimensions;
+
                         node->is_array = (node->array_dimensions > 0);
                     }
 
@@ -3392,91 +3401,6 @@ case NODE_INDEX: {
             }
             break;
         }
-
- case NODE_STRUCT_DEF: {
-            // Add struct type to scope
-            if (node->value) {
-                // Check for redeclaration
-                semantic_info* existing = find_in_scope(current_scope, node->value);
-                if (existing) {
-                    printf("Semantic Error at line %d: Redeclaration of struct '%s'\n", node->line_number, node->value);
-                } else {
-                    // FIXED: use const char* for string literal
-                    semantic_info* struct_info = create_semantic_info(
-                        (char*)"struct", node->value, false, false, false, false, 0, false, 0, false
-                    );
-                    
-                    // Set LLVM fields for struct
-                    node->struct_name = strdup(node->value);
-                    node->size = 0; // To be calculated based on members
-                    struct_info->struct_name = strdup(node->value);
-                    
-                    // Process struct members to calculate size and validate
-                    ASTNode* member_list = node->child;
-                    if (member_list && member_list->type == NODE_STRUCT_MEMBER_LIST) {
-                        ASTNode* member = member_list->child;
-                        int struct_size = 0;
-                
-                        while (member) {
-                            if (member->type == NODE_VARIABLE_DECL) {
-                                ASTNode* member_type = member->child;
-                                ASTNode* member_declarator = member_type ? member_type->next : NULL;
-                                
-                                if (member_type && member_declarator) {
-                                    char* member_name = get_identifier_from_declarator(member_declarator);
-                                    if (member_name) {
-                                        // Check for duplicate member names
-                                        // TODO: In complete implementation, track member names
-                                        
-                                        // Set fields in member nodes - FIXED: removed is_struct_member
-                                        if (member->datatype) free(member->datatype);
-                                        member->datatype = member_type->value ? strdup(member_type->value) : NULL;
-                                        
-                                        if (member_type->datatype) free(member_type->datatype);
-                                        member_type->datatype = member_type->value ? strdup(member_type->value) : NULL;
-                                        
-                                        if (member_declarator->datatype) free(member_declarator->datatype);
-                                        member_declarator->datatype = member_type->value ? strdup(member_type->value) : NULL;
-                                        
-                                        // Calculate member size contribution
-                                        if (member_type->value) {
-                                            if (strcmp(member_type->value, "int") == 0) struct_size += 4;
-                                            else if (strcmp(member_type->value, "float") == 0) struct_size += 4;
-                                            else if (strcmp(member_type->value, "double") == 0) struct_size += 8;
-                                            else if (strcmp(member_type->value, "char") == 0) struct_size += 1;
-                                            else if (strcmp(member_type->value, "short") == 0) struct_size += 2;
-                                            else if (strcmp(member_type->value, "long") == 0) struct_size += 8;
-                                            else if (strcmp(member_type->value, "bool") == 0) struct_size += 1;
-                                            // For struct members, we'd need recursive size calculation
-                                        }
-                                    }
-                                }
-                            }
-                            member = member->next;
-                        }
-                        
-                        node->size = struct_size;
-                        struct_info->size = struct_size;
-                    }
-                    
-                    if (!current_scope) {
-                        current_scope = struct_info;
-                        *parent_scope = current_scope;
-                    } else {
-                        semantic_info* last = current_scope;
-                        while (last->next) last = last->next;
-                        last->next = struct_info;
-                        struct_info->prev = last;
-                    }
-                    last_added = struct_info;
-                    
-                    
-                }
-            }
-            break;
-        }
-
-
 
 case NODE_INT_LITERAL: {
             if (node->datatype) free(node->datatype);
@@ -3772,13 +3696,25 @@ case NODE_IF_STMT: {
             break;
         }
  case NODE_FOR_STMT: {
+            
+            semantic_info * last =current_scope;
+            while(last->next){
+                last=last->next;
+            }
+
             ASTNode* init = node->child;
             ASTNode* condition = init ? init->next : NULL;
             ASTNode* increment = condition ? condition->next : NULL;
             // FIXED: removed unused variable 'body'
             ASTNode* body = increment ? increment->next : NULL;
             
+
             if (init) check_semantics(init, parent_scope);
+           
+           if(last->next){
+            scope_start_ptr=last->next;
+           }
+           
             // Check condition type if present
             if (condition && condition->datatype) {
                 if (strcmp(condition->datatype, "bool") != 0) {
@@ -3791,13 +3727,19 @@ case NODE_IF_STMT: {
             break;
         }
 case NODE_RANGE_FOR_STMT: {
+            semantic_info * last =current_scope;
+            while(last->next){
+                last=last->next;
+            }
+
             ASTNode* decl = node->child;
             ASTNode* range_expr = decl ? decl->next : NULL;
             // FIXED: removed unused variable 'body'
             ASTNode* body = range_expr ? range_expr->next : NULL;
             
             if (decl) check_semantics(decl, parent_scope);
-            
+            if(last->next)scope_start_ptr=last->next;
+
             // Check if range expression is iterable (array or has begin/end)
             if (range_expr && range_expr->datatype) {
                 if (!range_expr->is_array && strcmp(range_expr->datatype, "string") != 0) {
@@ -3930,7 +3872,7 @@ case NODE_CIN_STMT: {
         check_semantics(args, parent_scope);
         
         // Check that all arguments are input stream compatible (lvalues)
-        ASTNode* arg = args;
+        ASTNode* arg = (args->type==NODE_ARG_LIST)?args->child:args;
         while (arg) {
             if (arg->value) printf("'%s' ", arg->value);
             if (arg->datatype) printf("type '%s'", arg->datatype);
@@ -4357,8 +4299,7 @@ case NODE_IDENTIFIER: {
     
     // Remove the last added node from scope when returning (for local scopes)
     if (node->type == NODE_COMPOUND_STMT || node->type == NODE_FUNCTION_DEF || node->type == NODE_FUNCTION_DECL 
-        || node->type == NODE_FOR_STMT || node->type == NODE_RANGE_FOR_STMT || node->type == NODE_NAMESPACE_DEF
-        || node->type == NODE_CLASS_DEF || node->type == NODE_STRUCT_DEF) {
+        || node->type == NODE_FOR_STMT || node->type == NODE_RANGE_FOR_STMT) {
         if (scope_start_ptr && scope_start_ptr->prev) {
             // Only free if this is actually a local scope node, not a global one
             semantic_info* to_free = scope_start_ptr;
