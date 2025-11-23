@@ -92,7 +92,6 @@ WS       [ \t\r]*
 "++"        { return INC; }
 "--"        { return DEC; }
 "?"         { return QUESTION; }
-"::"        { return SCOPE; }
 "->"        { return ARROW; }
 "."         { return DOT; }
 "..."       { return ELLIPSIS; }
@@ -107,14 +106,14 @@ WS       [ \t\r]*
 ":"         { return COLON; }
 ","         { return COMMA; }
 
-"cin"  { return STD_CIN; }
-"cout" { return STD_COUT; }
+"cin"       { return STD_CIN; }
+"cout"      { return STD_COUT; }
 "endl"      { return STD_ENDL; }
 
-"va_start"  { return VA_START; }
-"va_arg"    { return VA_ARG; }
-"va_end"    { return VA_END; }
-
+"va_start"  { return TOK_VA_START; }
+"va_arg"    { return TOK_VA_ARG; }
+"va_end"    { return TOK_VA_END; }
+"va_list"   {return TOK_VA_LIST;}
 
 
 
