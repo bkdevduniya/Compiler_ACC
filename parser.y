@@ -74,16 +74,9 @@ typedef enum {
     NODE_VA_LIST_TYPE,
     NODE_ELLIPSIS,
     NODE_VAR_ARGS,
-    NODE_INT_LITERAL,
-    NODE_FLOAT_LITERAL,
-    NODE_CHAR_LITERAL,
-    NODE_BOOL_LITERAL,
-    NODE_STRING_LITERAL,
     NODE_CAST_EXPR,
     NODE_SIZEOF_EXPR,
     NODE_GOTO_STMT,
-    NODE_COUT_STMT,
-    NODE_CIN_STMT,
     NODE_ACCESS_SPEC,
     NODE_STATIC_ASSERT,
     NODE_ATTR_EXPR,
@@ -96,7 +89,7 @@ typedef struct ASTNode {
     char *value;
     char *op;
     char* datatype;
-    
+
     /* ========== LLVM IR Generation Fields ========== */
     bool is_array;
     int array_dimensions;
@@ -121,7 +114,12 @@ typedef struct ASTNode {
     bool is_consteval;
     bool is_constinit;
     bool is_postfix;
-    
+    bool is_volatile;           // Whether type is volatile
+    bool is_va_list;            // Whether this is a va_list type
+    bool is_va_arg;             // Whether this is a va_arg expression
+    char* va_list_name;         // Name of va_list variable
+    char* va_arg_type;          // Type requested in va_arg
+
     struct ASTNode *left;
     struct ASTNode *right;
     struct ASTNode *child;
@@ -207,9 +205,9 @@ typedef struct semantic_info {
     int * init_list_sizes;
 
     /* ========== Additional fields for complete LLVM info ========== */
-    int array_dimensions;    
+    int array_dimensions;
     int max_array_dim;   // Number of array dimensions
-    int* array_sizes;           // Array sizes for each dimension  
+    int* array_sizes;           // Array sizes for each dimension
     bool is_const;              // Whether type is const
     bool is_static;             // Whether storage is static
     bool is_unsigned;           // Whether type is unsigned
@@ -233,7 +231,7 @@ typedef struct semantic_info {
     char* namespace_name;       // For namespace
     char* template_params;      // For template parameters
     /* ============================================================== */
-    
+
     struct semantic_info* next;
     struct semantic_info* prev;
     struct semantic_info* params;
@@ -262,7 +260,7 @@ ASTNode* create_ast_node(NodeType type, int line, char *value) {
     node->value = value ? strdup(value) : NULL;
     node->op = NULL;
     node->datatype = NULL;
-    
+
     /* Initialize LLVM IR fields */
     node->is_array = false;
     node->array_dimensions = 0;
@@ -286,7 +284,12 @@ ASTNode* create_ast_node(NodeType type, int line, char *value) {
     node->is_consteval = false;
     node->is_constinit = false;
     node->struct_name = NULL;
-    
+    node->is_volatile = false;
+    node->is_va_list = false;
+    node->is_va_arg = false;
+    node->va_list_name = NULL;
+    node->va_arg_type = NULL;
+
     node->left = NULL;
     node->right = NULL;
     node->child = NULL;
@@ -319,7 +322,7 @@ ASTNode* create_ternary_node(int line, ASTNode *cond, ASTNode *then_expr, ASTNod
 
 void ast_add_child(ASTNode *parent, ASTNode *child) {
     if (!parent || !child) return;
-    
+
     if (!parent->child) {
         parent->child = child;
     } else {
@@ -333,7 +336,7 @@ void ast_add_child(ASTNode *parent, ASTNode *child) {
 
 void ast_add_sibling(ASTNode *first, ASTNode *sibling) {
     if (!first || !sibling) return;
-    
+
     ASTNode *last = first;
     while (last->next) {
         last = last->next;
@@ -345,7 +348,7 @@ void ast_add_sibling(ASTNode *first, ASTNode *sibling) {
 
 void set_type_modifiers(ASTNode* node, char* type_name) {
     if (!node || !type_name) return;
-    
+
     // Check for type modifiers
     node->is_const = (strstr(type_name, "const") != NULL);
     node->is_static = (strstr(type_name, "static") != NULL);
@@ -355,7 +358,7 @@ void set_type_modifiers(ASTNode* node, char* type_name) {
     node->is_consteval = (strstr(type_name, "consteval") != NULL);
     node->is_constinit = (strstr(type_name, "constinit") != NULL);
 
-    
+
     // Set size based on type
     if (strcmp(type_name, "int") == 0 || strcmp(type_name, "unsigned int") == 0) {
         node->size = 4;
@@ -384,7 +387,7 @@ void set_type_modifiers(ASTNode* node, char* type_name) {
 
 void set_type_modifiers_semantic(semantic_info* info, char* type_name) {
     if (!info || !type_name) return;
-    
+
     // Check for type modifiers
     info->is_const = (strstr(type_name, "const") != NULL);
     info->is_static = (strstr(type_name, "static") != NULL);
@@ -400,7 +403,7 @@ void set_type_modifiers_semantic(semantic_info* info, char* type_name) {
     info->is_consteval = (strstr(type_name, "consteval") != NULL);
     info->is_constinit = (strstr(type_name, "constinit") != NULL);
     info->is_explicit = (strstr(type_name, "explicit") != NULL);
-    
+
     // Set size based on type
     if (strcmp(type_name, "int") == 0 || strcmp(type_name, "unsigned int") == 0) {
         info->size = 4;
@@ -429,7 +432,7 @@ void set_type_modifiers_semantic(semantic_info* info, char* type_name) {
 
 void copy_llvm_fields(ASTNode* dest, ASTNode* src) {
     if (!dest || !src) return;
-    
+
     dest->is_array = src->is_array;
     dest->pointer_depth = src->pointer_depth;
     dest->is_pointer = src->is_pointer;
@@ -447,14 +450,14 @@ void copy_llvm_fields(ASTNode* dest, ASTNode* src) {
     dest->is_constexpr = src->is_constexpr;
     dest->is_consteval = src->is_consteval;
     dest->is_constinit = src->is_constinit;
-    
+
     // Copy array dimensions and sizes
     dest->array_dimensions = src->array_dimensions;
     if (src->array_sizes && src->array_dimensions > 0) {
         dest->array_sizes =(int*) malloc(src->array_dimensions * sizeof(int));
         memcpy(dest->array_sizes, src->array_sizes, src->array_dimensions * sizeof(int));
     }
-    
+
     // Copy struct name
     if (src->struct_name) {
         dest->struct_name = strdup(src->struct_name);
@@ -463,7 +466,7 @@ void copy_llvm_fields(ASTNode* dest, ASTNode* src) {
 
 void copy_semantic_to_ast(ASTNode* dest, semantic_info* src) {
     if (!dest || !src) return;
-    
+
     // Copy all semantic info fields to AST node
     dest->is_array = src->isarray;
     dest->is_pointer = src->ispointer;
@@ -484,13 +487,13 @@ void copy_semantic_to_ast(ASTNode* dest, semantic_info* src) {
     dest->is_consteval = src->is_consteval;
     dest->is_constinit = src->is_constinit;
     dest->array_dimensions = src->array_dimensions;
-    
+
     // Copy array sizes if available
     if (src->array_sizes && src->array_dimensions > 0) {
         dest->array_sizes = (int*)malloc(src->array_dimensions * sizeof(int));
         memcpy(dest->array_sizes, src->array_sizes, src->array_dimensions * sizeof(int));
     }
-    
+
     // Copy struct name
     if (src->struct_name) {
         dest->struct_name = strdup(src->struct_name);
@@ -513,7 +516,7 @@ semantic_info* create_semantic_info(char* type, char* identifier, bool isfunctio
     info->pointerdepth = pointerdepth;
     info->param_count = param_count;
     info->has_ellipsis = has_ellipsis;
-    
+
     /* Initialize extended LLVM fields */
     info->array_dimensions = 0;
     info->array_sizes = NULL;
@@ -541,12 +544,12 @@ semantic_info* create_semantic_info(char* type, char* identifier, bool isfunctio
     info->enum_name = NULL;
     info->namespace_name = NULL;
     info->template_params = NULL;
-    
+
     // Set type modifiers and size based on type
     if (type) {
         set_type_modifiers_semantic(info, type);
     }
-    
+
     info->next = NULL;
     info->prev = NULL;
     info->params = NULL;
@@ -579,6 +582,7 @@ void free_semantic_scope(semantic_info* scope) {
 
 semantic_info* find_in_scope(semantic_info* scope, char* identifier) {
     semantic_info* current = scope;
+
     while (current) {
         if (current->identifier && strcmp(current->identifier, identifier) == 0) {
             return current;
@@ -622,13 +626,13 @@ void get_type_info_from_declarator(ASTNode* declarator, bool* is_pointer, int* p
     *is_refrence = false;
     *array_dimensions = 0;
     *array_sizes = NULL;
-    
+
     if (!declarator) return;
-    
+
     ASTNode* current = declarator;
     int dim_count = 0;
     int sizes[10] = {0};
-    
+
     while (current) {
         if (current->type == NODE_DECLARATOR && current->value && strcmp(current->value, "*") == 0) {
             *is_pointer = true;
@@ -702,12 +706,6 @@ bool is_valid_lvalue(ASTNode* node) {
         case NODE_TERNARY_OP:
             return false;
         case NODE_LITERAL:
-        case NODE_INT_LITERAL:
-        case NODE_FLOAT_LITERAL:
-        case NODE_CHAR_LITERAL:
-        case NODE_BOOL_LITERAL:
-        case NODE_STRING_LITERAL:
-            return false;
         case NODE_INIT_LIST:
             return false;
         case NODE_CAST_EXPR:
@@ -730,7 +728,7 @@ char* get_identifier_from_declarator(ASTNode* declarator) {
         } else if (current->type == NODE_INDEX && current->child) {
             current = current->child;
         }
-        else if (current->type == NODE_MULTI_PTR && current->child) {
+        else if (current->type == NODE_MULTI_PTR) {
             current = current->next;
         }
         else {
@@ -767,6 +765,13 @@ bool is_type_compatible(char* t1, char* t2) {
         return (strstr(t1, "(*") != NULL || strstr(t1, "function") != NULL ||
                 strcmp(t1, "auto") == 0);
     }
+
+    // Handle va_list type
+        if (strcmp(t1, "va_list") == 0 || strcmp(t2, "va_list") == 0) {
+            // va_list is only compatible with itself
+            return strcmp(t1, t2) == 0;
+        }
+
 
     // Handle auto type (can be assigned anything)
     if (strcmp(t1, "auto") == 0 || strcmp(t2, "auto") == 0) {
@@ -1303,6 +1308,66 @@ char* infer_lambda_return_type(ASTNode* body) {
     // Look for return statements in the body
     return find_return_type_in_node(body);
 }
+
+/* ==================== VARIABLE ARGUMENTS HELPER FUNCTIONS ==================== */
+
+// Check if current function has variable arguments
+bool current_function_has_varargs(semantic_info* current_scope) {
+    semantic_info* scope = current_scope;
+    while (scope) {
+        if (scope->isfunction && scope->has_ellipsis) {
+            return true;
+        }
+        scope = scope->next;
+    }
+    return false;
+}
+
+// Validate va_list usage
+void validate_va_list_usage(ASTNode* node, semantic_info* current_scope, int line_number) {
+    if (!current_function_has_varargs(current_scope)) {
+        printf("Semantic Error at line %d: va_list used in function without variable arguments\n",
+               line_number);
+    }
+}
+
+// Get the last named parameter for va_start
+char* get_last_named_parameter(semantic_info* func_info) {
+    if (!func_info || !func_info->params) return NULL;
+
+    semantic_info* last_param = func_info->params;
+    while (last_param->next) {
+        last_param = last_param->next;
+    }
+    return last_param->identifier;
+}
+
+// Validate type for va_arg
+bool is_valid_va_arg_type(char* type_name) {
+    if (!type_name) return false;
+
+    // va_arg can only be used with fundamental types that don't require special handling
+    char* valid_types[] = {
+        "int", "unsigned int", "long", "unsigned long",
+        "double", "float", "char", "unsigned char",
+        "short", "unsigned short", "bool", "void*", "char*"
+    };
+    int num_types = sizeof(valid_types) / sizeof(valid_types[0]);
+
+    for (int i = 0; i < num_types; i++) {
+        if (strcmp(type_name, valid_types[i]) == 0) {
+            return true;
+        }
+    }
+
+    // Check for pointer types
+    if (strstr(type_name, "*") != NULL) {
+        return true;
+    }
+
+    return false;
+}
+
 /* ==================== COMPLETE SEMANTIC CHECKING FUNCTION ==================== */
 
 void check_semantics(ASTNode* node, semantic_info** parent_scope) {
@@ -1951,6 +2016,42 @@ case NODE_VARIABLE_DECL: {
                 memcpy(declarator_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
             }
             set_type_modifiers(declarator_node, type_node->value);
+
+           ASTNode* identifier_node=declarator_node;
+
+           while(identifier_node){
+           if (identifier_node->type==NODE_IDENTIFIER)break;
+           identifier_node=identifier_node->child;
+           if(identifier_node&&identifier_node->type!=NODE_IDENTIFIER&&array_sizes&&array_dimensions>1){
+             if (identifier_node->datatype) free(identifier_node->datatype);
+             identifier_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+             identifier_node->is_pointer = is_pointer;
+             identifier_node->pointer_depth = pointer_depth;
+             identifier_node->is_array = is_array;
+             identifier_node->is_reference = is_ref;
+             identifier_node->array_dimensions = array_dimensions;
+             if (array_sizes) {
+                           identifier_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                           memcpy(identifier_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                       }
+            set_type_modifiers(identifier_node, type_node->value);
+            }
+           }
+
+           if(identifier_node&&identifier_node->type==NODE_IDENTIFIER){
+                       if (identifier_node->datatype) free(declarator_node->datatype);
+                        identifier_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                        identifier_node->is_pointer = is_pointer;
+                        identifier_node->pointer_depth = pointer_depth;
+                        identifier_node->is_array = is_array;
+                        identifier_node->is_reference = is_ref;
+                        identifier_node->array_dimensions = array_dimensions;
+                        if (array_sizes) {
+                            identifier_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                            memcpy(identifier_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                        }
+                        set_type_modifiers(identifier_node, type_node->value);
+           }
 
             // Set fields in assignment node if present
             if (assignment_node) {
@@ -3635,94 +3736,7 @@ case NODE_GOTO_STMT: {
 
 
 
-case NODE_COUT_STMT: {
 
-
-    ASTNode* args = node->child;
-    if (args) {
-        check_semantics(args, parent_scope);
-
-        // Check that all arguments are output stream compatible
-        ASTNode* arg = args;
-        while (arg) {
-            if (arg->datatype) {
-                // Most basic types can be output, but check for invalid types
-                if (arg->is_function) {
-                    printf("Semantic Error at line %d: Cannot output function '%s' with cout\n",
-                           node->line_number, arg->value ? arg->value : "unknown");
-                } else if (arg->is_pointer && arg->pointer_depth > 1) {
-                    printf("Semantic Error at line %d: Cannot output multi-level pointer with cout\n",
-                           node->line_number);
-                } else if (arg->struct_name && strcmp(arg->struct_name, "unknown") != 0) {
-                    // Allow struct output with proper operator<< overload (simplified)
-                    printf("Warning at line %d: Struct type '%s' may require operator<< overload for cout\n",
-                           node->line_number, arg->struct_name);
-                }
-
-                // Set cout node properties
-                node->datatype = strdup("void");
-                node->is_function = false;
-                node->param_count = 0;
-                node->has_ellipsis = false;
-            }
-            arg = arg->next;
-        }
-    }
-    break;
-}
-
-case NODE_CIN_STMT: {
-
-    ASTNode* args = node->child;
-    if (args) {
-        // First check semantics of arguments
-        check_semantics(args, parent_scope);
-
-        // Check that all arguments are input stream compatible (lvalues)
-        ASTNode* arg = (args->type==NODE_ARG_LIST)?args->child:args;
-        while (arg) {
-            if (arg->value) printf("'%s' ", arg->value);
-            if (arg->datatype) printf("type '%s'", arg->datatype);
-            printf("\n");
-
-            // Enhanced lvalue checking for cin
-            bool is_valid = is_valid_lvalue(arg);
-
-            if (!is_valid) {
-                printf("Semantic Error at line %d: Cin requires lvalue (cannot read into rvalue or temporary)\n",
-                       node->line_number);
-
-            } else {
-                printf("DEBUG: Cin argument '%s' is a valid lvalue\n",
-                       arg->value ? arg->value : "unknown");
-
-                // Additional checks for cin-specific restrictions
-                if (arg->is_const) {
-                    printf("Semantic Error at line %d: Cannot read into const variable '%s' with cin\n",
-                           node->line_number, arg->value ? arg->value : "unknown");
-                }
-
-                if (arg->is_array && !arg->is_pointer) {
-                    printf("Semantic Error at line %d: Cannot read directly into array '%s' with cin (use loop or pointer)\n",
-                           node->line_number, arg->value ? arg->value : "unknown");
-                }
-
-                if (arg->is_function) {
-                    printf("Semantic Error at line %d: Cannot read into function '%s' with cin\n",
-                           node->line_number, arg->value ? arg->value : "unknown");
-                }
-            }
-            arg = arg->next;
-        }
-
-        // Set cin node properties
-        node->datatype = strdup("void");
-        node->is_function = false;
-        node->param_count = 0;
-        node->has_ellipsis = false;
-    }
-    break;
-}
 
 case NODE_CAST_EXPR: {
             ASTNode* type_node = node->child;
@@ -3773,15 +3787,17 @@ case NODE_SIZEOF_EXPR: {
         }
 
 case NODE_IDENTIFIER: {
-
+            printf("************* GOT IDENTIFIER" );
 
             if (!node->value) {
                 printf("Semantic Error at line %d: Identifier has no name\n", node->line_number);
                 break;
             }
 
+
             // Look up the identifier in the current scope
             semantic_info* info = find_in_scope(current_scope, node->value);
+
 
             if (!info) {
                 printf("Semantic Error at line %d: Undeclared identifier '%s'\n",
@@ -3795,6 +3811,7 @@ case NODE_IDENTIFIER: {
                 node->is_array = false;
                 node->array_dimensions = 0;
                 node->is_reference = false;
+                node->is_parameter=false;
                 node->is_function = false;
                 node->param_count = 0;
                 node->has_ellipsis = false;
@@ -3805,7 +3822,9 @@ case NODE_IDENTIFIER: {
                 break;
             }
 
-
+            if (info->isparam){
+            printf("a function argument found \n");
+            }
             // Copy ALL semantic information to the AST node
             if (node->datatype) free(node->datatype);
             node->datatype = info->type ? strdup(info->type) : NULL;
@@ -3869,7 +3888,7 @@ case NODE_IDENTIFIER: {
         }
 
         // ==================== PARAMETER LIST ====================
-        case NODE_PARAM_LIST: {
+      case NODE_PARAM_LIST: {
             ASTNode* param = node->child;
             int param_count = 0;
             bool has_varargs = false;
@@ -3898,47 +3917,9 @@ case NODE_IDENTIFIER: {
             break;
         }
 
-case NODE_VA_LIST: {
-    // Handle va_list variable declaration
-    ASTNode* id_node = node->child;
-    if (id_node && id_node->type == NODE_IDENTIFIER) {
-        char* identifier = id_node->value;
-
-        // Check for redeclaration
-        semantic_info* existing = find_in_scope(current_scope, identifier);
-        if (existing) {
-            printf("Semantic Error at line %d: Redeclaration of '%s'\n", node->line_number, identifier);
-            return;
-        }
-
-        // Create semantic info for va_list
-        semantic_info* va_info = create_semantic_info(
-            "va_list", identifier, false, true, false, false,
-            1, false, 0, false
-        );
-
-        // Add to scope
-        if (!current_scope) {
-            current_scope = va_info;
-            *parent_scope = current_scope;
-        } else {
-            semantic_info* last = current_scope;
-            while (last->next) last = last->next;
-            last->next = va_info;
-            va_info->prev = last;
-        }
-
-        // Set AST node properties
-        node->datatype = strdup("va_list");
-        node->is_pointer = true;
-        node->pointer_depth = 1;
-        node->size = 8; // Platform-dependent va_list size
-    }
-    break;
-}
 
         // ==================== DECLARATOR ====================
-        case NODE_DECLARATOR: {
+case NODE_DECLARATOR: {
 
             // Declarators are handled in variable/function declarations
             // This case is for standalone declarator analysis
@@ -4095,7 +4076,239 @@ case NODE_VA_LIST: {
             break;
         }
 
+case NODE_VA_LIST: {
+    printf("DEBUG: Processing va_list declaration\n");
 
+    ASTNode* id_node = node->child;
+    if (id_node && id_node->type == NODE_IDENTIFIER) {
+        char* identifier = id_node->value;
+
+        // Check for redeclaration
+        semantic_info* existing = find_in_scope(current_scope, identifier);
+        if (existing) {
+            printf("Semantic Error at line %d: Redeclaration of '%s'\n", node->line_number, identifier);
+            return;
+        }
+
+        // Validate va_list usage context
+        validate_va_list_usage(node, current_scope, node->line_number);
+
+        // Create semantic info for va_list
+        semantic_info* va_info = create_semantic_info(
+            "va_list", identifier, false, true, false, false,
+            1, false, 0, false
+        );
+
+        // Set va_list specific properties
+        va_info->size = 24; // Typical va_list size (platform dependent)
+        va_info->is_const = false;
+        va_info->is_volatile = true; // va_list should be treated as volatile
+
+        // Add to scope
+        if (!current_scope) {
+            current_scope = va_info;
+            *parent_scope = current_scope;
+        } else {
+            semantic_info* last = current_scope;
+            while (last->next) last = last->next;
+            last->next = va_info;
+            va_info->prev = last;
+        }
+
+        // Set AST node properties for LLVM IR generation
+        node->datatype = strdup("va_list");
+        node->is_pointer = true;
+        node->pointer_depth = 1;
+        node->size = 24; // Platform-dependent va_list size
+        node->is_volatile = true;
+
+        printf("DEBUG: va_list '%s' declared at line %d\n", identifier, node->line_number);
+    } else {
+        printf("Semantic Error at line %d: va_list missing identifier\n", node->line_number);
+    }
+    break;
+}
+
+case NODE_VA_START: {
+    printf("DEBUG: Processing va_start\n");
+
+    ASTNode* va_list_node = node->child;
+    ASTNode* last_param_node = va_list_node ? va_list_node->next : NULL;
+
+    if (!va_list_node || !last_param_node) {
+        printf("Semantic Error at line %d: va_start requires two arguments\n", node->line_number);
+        break;
+    }
+
+    // Check semantics of arguments
+    check_semantics(va_list_node, parent_scope);
+    check_semantics(last_param_node, parent_scope);
+
+    // Validate va_list argument
+    if (va_list_node->type != NODE_IDENTIFIER) {
+        printf("Semantic Error at line %d: va_start first argument must be a va_list identifier\n",
+               node->line_number);
+    } else {
+        semantic_info* va_info = find_in_scope(current_scope, va_list_node->value);
+        if (!va_info || strcmp(va_info->type, "va_list") != 0) {
+            printf("Semantic Error at line %d: va_start first argument must be a va_list\n",
+                   node->line_number);
+        }
+    }
+
+    // Validate last parameter argument
+    if (last_param_node->type != NODE_IDENTIFIER) {
+        printf("Semantic Error at line %d: va_start second argument must be an identifier\n",
+               node->line_number);
+    } else {
+        // Find the current function
+        semantic_info* current_func = NULL;
+        semantic_info* temp_scope = current_scope;
+        while (temp_scope) {
+            if (temp_scope->isfunction) {
+                current_func = temp_scope;
+                break;
+            }
+            temp_scope = temp_scope->next;
+        }
+
+        if (current_func) {
+            char* last_param = get_last_named_parameter(current_func);
+            if (!last_param || strcmp(last_param_node->value, last_param) != 0) {
+                printf("Semantic Error at line %d: va_start second argument must be the last named parameter\n",
+                       node->line_number);
+                if (last_param) {
+                    printf("  Expected '%s', got '%s'\n", last_param, last_param_node->value);
+                }
+            }
+        }
+    }
+
+    // Validate context
+    validate_va_list_usage(node, current_scope, node->line_number);
+
+    // Set node properties for LLVM IR
+    node->datatype = strdup("void");
+    node->size = 0;
+    node->is_function = true; // Treated as function call for IR generation
+
+    printf("DEBUG: va_start processed at line %d\n", node->line_number);
+    break;
+}
+
+case NODE_VA_ARG: {
+    printf("DEBUG: Processing va_arg\n");
+
+    ASTNode* va_list_node = node->child;
+    ASTNode* type_node = va_list_node ? va_list_node->next : NULL;
+
+    if (!va_list_node || !type_node) {
+        printf("Semantic Error at line %d: va_arg requires two arguments\n", node->line_number);
+        break;
+    }
+
+    // Check semantics of arguments
+    check_semantics(va_list_node, parent_scope);
+    check_semantics(type_node, parent_scope);
+
+    // Validate va_list argument
+    if (va_list_node->type != NODE_IDENTIFIER) {
+        printf("Semantic Error at line %d: va_arg first argument must be a va_list identifier\n",
+               node->line_number);
+    } else {
+        semantic_info* va_info = find_in_scope(current_scope, va_list_node->value);
+        if (!va_info || strcmp(va_info->type, "va_list") != 0) {
+            printf("Semantic Error at line %d: va_arg first argument must be a va_list\n",
+                   node->line_number);
+        }
+    }
+
+    // Validate type argument
+    if (type_node->type != NODE_TYPE && type_node->type != NODE_VA_LIST_TYPE) {
+        printf("Semantic Error at line %d: va_arg second argument must be a type\n",
+               node->line_number);
+    } else if (type_node->datatype) {
+        if (!is_valid_va_arg_type(type_node->datatype)) {
+            printf("Semantic Warning at line %d: Type '%s' may not work properly with va_arg\n",
+                   node->line_number, type_node->datatype);
+        }
+    }
+
+    // Validate context
+    validate_va_list_usage(node, current_scope, node->line_number);
+
+    // Set node properties for LLVM IR generation
+    if (type_node->datatype) {
+        node->datatype = strdup(type_node->datatype);
+        // Copy LLVM fields from type node
+        copy_llvm_fields(node, type_node);
+
+        // For va_arg, the result is an rvalue, not a pointer
+        node->is_pointer = false;
+        node->pointer_depth = 0;
+    } else {
+        node->datatype = strdup("int"); // Default type
+    }
+
+    node->is_function = true; // Treated as function call for IR generation
+
+    printf("DEBUG: va_arg returns type '%s' at line %d\n", node->datatype, node->line_number);
+    break;
+}
+
+case NODE_VA_END: {
+    printf("DEBUG: Processing va_end\n");
+
+    ASTNode* va_list_node = node->child;
+
+    if (!va_list_node) {
+        printf("Semantic Error at line %d: va_end requires one argument\n", node->line_number);
+        break;
+    }
+
+    // Check semantics of argument
+    check_semantics(va_list_node, parent_scope);
+
+    // Validate va_list argument
+    if (va_list_node->type != NODE_IDENTIFIER) {
+        printf("Semantic Error at line %d: va_end argument must be a va_list identifier\n",
+               node->line_number);
+    } else {
+        semantic_info* va_info = find_in_scope(current_scope, va_list_node->value);
+        if (!va_info || strcmp(va_info->type, "va_list") != 0) {
+            printf("Semantic Error at line %d: va_end argument must be a va_list\n",
+                   node->line_number);
+        }
+    }
+
+    // Validate context
+    validate_va_list_usage(node, current_scope, node->line_number);
+
+    // Set node properties for LLVM IR
+    node->datatype = strdup("void");
+    node->size = 0;
+    node->is_function = true; // Treated as function call for IR generation
+
+    printf("DEBUG: va_end processed at line %d\n", node->line_number);
+    break;
+}
+
+case NODE_VA_LIST_TYPE: {
+    printf("DEBUG: Processing va_list type\n");
+
+    if (node->value) {
+        if (node->datatype) free(node->datatype);
+        node->datatype = strdup("va_list");
+
+        // Set va_list type properties for LLVM IR
+        node->is_pointer = true;
+        node->pointer_depth = 1;
+        node->size = 24; // Platform-dependent va_list size
+        node->is_volatile = true;
+        node->is_const = false;
+    }
+    break;
+}
 
         // Handle other node types with default recursive checking
 
@@ -4128,9 +4341,6 @@ case NODE_VA_LIST: {
             }
         }
     }
-
-
-
     // Continue with siblings using the original scope (not modified by this node)
     if (node->next) {
         check_semantics(node->next, parent_scope);
@@ -4224,11 +4434,89 @@ typedef struct {
     int* array_sizes;
     int is_pointer;
     int pointer_depth;
+    int size;
+    char* llvm_type;
     // other info like type, scope, etc.
 } SymbolEntry;
 
 SymbolEntry symbol_table[1000];
 int symbol_count = 0;
+
+/* ==================== IR STORAGE DATA STRUCTURES ==================== */
+
+typedef struct {
+    char* ir_line;
+    int line_number;
+} IRLines;
+
+typedef struct {
+    char* ir_line;
+    int line_number;
+} GlobalIRLine;
+
+// Storage for different types of IR
+GlobalIRLine global_ir_lines[10000];
+IRLines function_ir_lines[10000];
+IRLines other_ir_lines[10000];
+
+int global_ir_count = 0;
+int function_ir_count = 0;
+int other_ir_count = 0;
+
+// Flag to track if we're in global scope collection mode
+int collecting_global_ir = 0;
+
+/* ==================== STRING CONSTANT COLLECTION ==================== */
+
+typedef struct {
+    char* name;
+    char* content;
+    int length;
+} StringConstant;
+
+StringConstant string_constants[1000];
+int string_const_count = 0;
+
+void add_string_constant(char* name, char* content, int length) {
+    string_constants[string_const_count].name = strdup(name);
+    string_constants[string_const_count].content = strdup(content);
+    string_constants[string_const_count].length = length;
+    string_const_count++;
+}
+
+void emit_string_constants() {
+    // Set flag to ensure these go to global storage
+    int old_collecting_flag = collecting_global_ir;
+    collecting_global_ir = 1;
+
+    for (int i = 0; i < string_const_count; i++) {
+        StringConstant* str_const = &string_constants[i];
+        emit_llvm_ir("@%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"",
+                     str_const->name, str_const->length, str_const->content);
+    }
+
+    // Restore the original collecting flag
+    collecting_global_ir = old_collecting_flag;
+}
+
+// Helper function to generate unique string constant names
+char* generate_string_constant_name() {
+    static int string_counter = 0;
+    char* name = malloc(32);
+    sprintf(name, ".str%d", string_counter++);
+    return name;
+}
+
+// Helper function to generate unique format string names
+char* generate_format_string_name() {
+    static int format_counter = 0;
+    char* name = malloc(32);
+    sprintf(name, ".io_format_%d", format_counter++);
+    return name;
+}
+
+
+
 
 void add_symbol(char* name, int is_static) {
     symbol_table[symbol_count].name = strdup(name);
@@ -4249,6 +4537,17 @@ void add_symbol_with_type(char* name, int is_static, char* datatype, int is_arra
     symbol_table[symbol_count].is_array = is_array;
     symbol_table[symbol_count].array_dimensions = array_dimensions;
 
+
+     if (strcmp(datatype, "va_list") == 0) {
+            // va_list is treated as i8* in LLVM
+            symbol_table[symbol_count].llvm_type = strdup("i8*");
+            symbol_table[symbol_count].is_pointer = 1;
+            symbol_table[symbol_count].pointer_depth = 1;
+            symbol_table[symbol_count].size = 8; // Pointer size
+        }
+
+
+
     if (array_sizes && array_dimensions > 0) {
         symbol_table[symbol_count].array_sizes = malloc(array_dimensions * sizeof(int));
         for (int i = 0; i < array_dimensions; i++) {
@@ -4257,6 +4556,7 @@ void add_symbol_with_type(char* name, int is_static, char* datatype, int is_arra
     } else {
         symbol_table[symbol_count].array_sizes = NULL;
     }
+
 
     symbol_table[symbol_count].is_pointer = is_pointer;
     symbol_table[symbol_count].pointer_depth = pointer_depth;
@@ -4280,6 +4580,53 @@ SymbolEntry* find_symbol(char* name) {
     }
     return NULL;
 }
+
+/* ==================== VA_LIST HANDLING ==================== */
+
+typedef struct {
+    char* va_list_name;
+    char* function_name;
+    int va_list_counter;
+} VAListInfo;
+
+VAListInfo va_list_stack[100];
+int va_list_stack_top = -1;
+
+// Push va_list info onto stack
+void push_va_list(char* va_list_name, char* function_name) {
+    va_list_stack_top++;
+    va_list_stack[va_list_stack_top].va_list_name = strdup(va_list_name);
+    va_list_stack[va_list_stack_top].function_name = strdup(function_name);
+    va_list_stack[va_list_stack_top].va_list_counter = 0;
+}
+
+// Pop va_list info from stack
+void pop_va_list() {
+    if (va_list_stack_top >= 0) {
+        free(va_list_stack[va_list_stack_top].va_list_name);
+        free(va_list_stack[va_list_stack_top].function_name);
+        va_list_stack_top--;
+    }
+}
+
+// Get current va_list info
+VAListInfo* get_current_va_list() {
+    if (va_list_stack_top >= 0) {
+        return &va_list_stack[va_list_stack_top];
+    }
+    return NULL;
+}
+
+// Generate unique name for va_list variable
+char* generate_va_list_name() {
+    static int va_list_counter = 0;
+    char* name = malloc(32);
+    sprintf(name, "%%va_list_%d", va_list_counter++);
+    return name;
+}
+
+
+
 
 // Add to your global variables section
 typedef struct {
@@ -4344,6 +4691,8 @@ int is_main_function(ASTNode* node);
 void allocate_parameters(ASTNode* params_node);
 char* generate_lambda_call(ASTNode* lambda_ptr, ASTNode* args_node);
 int ends_with_unconditional_branch(ASTNode* node);
+char* get_literal_value_for_llvm(ASTNode* node);
+char* get_complete_llvm_type(ASTNode* node);
 /* ==================== LLVM IR GENERATION FUNCTIONS ==================== */
 
 int has_main_function = 0;
@@ -4366,11 +4715,43 @@ char* generate_label() {
 
 void emit_llvm_ir(char* format, ...) {
     va_list args;
+    char buffer[1024];
+
     va_start(args, format);
-    vprintf(format, args);
-    printf("\n");
+    vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+
+    // Store the IR line in the appropriate storage
+    if (collecting_global_ir) {
+        // Store global declarations and string constants
+        global_ir_lines[global_ir_count].ir_line = strdup(buffer);
+        global_ir_lines[global_ir_count].line_number = global_ir_count;
+        global_ir_count++;
+    } else if (strcmp(current_function, "") != 0) {
+        // Store function definitions
+        function_ir_lines[function_ir_count].ir_line = strdup(buffer);
+        function_ir_lines[function_ir_count].line_number = function_ir_count;
+        function_ir_count++;
+    } else {
+        // Store other IR (typedefs, declarations, etc.)
+        other_ir_lines[other_ir_count].ir_line = strdup(buffer);
+        other_ir_lines[other_ir_count].line_number = other_ir_count;
+        other_ir_count++;
+    }
 }
+
+
+// Generate unique name for va_arg temp
+char* generate_va_arg_temp() {
+    VAListInfo* va_info = get_current_va_list();
+    if (va_info) {
+        char* name = malloc(32);
+        sprintf(name, "%%va_arg_%d_%d", va_info->va_list_counter++, va_list_stack_top);
+        return name;
+    }
+    return generate_temp();
+}
+
 
 // Helper function to convert C type string to LLVM type
 char* get_llvm_type_from_semantic_for_type(char* datatype) {
@@ -4408,65 +4789,331 @@ char* get_llvm_type_from_semantic_for_type(char* datatype) {
     }
 }
 
-// Helper function to get LLVM type from semantic info
-char* get_llvm_type_from_semantic(ASTNode* node) {
-    if (!node) return "i32"; // Default to i32
 
-    // First check if we have explicit datatype
-    if (node->datatype) {
-        if (strcmp(node->datatype, "int") == 0 ||
-            strcmp(node->datatype, "unsigned int") == 0 ||
-            strcmp(node->datatype, "long") == 0 ||
-            strcmp(node->datatype, "short") == 0) {
-            return "i32";
+/* ==================== GLOBAL VARIABLE COLLECTION ==================== */
+
+typedef struct {
+    char* name;
+    char* datatype;
+    int is_static;
+    int is_array;
+    int array_dimensions;
+    int* array_sizes;
+    int is_pointer;
+    int pointer_depth;
+    char* init_value;
+} GlobalDeclaration;
+
+GlobalDeclaration global_declarations[1000];
+int global_decl_count = 0;
+
+void add_global_declaration(char* name, char* datatype, int is_static, int is_array,
+                           int array_dimensions, int* array_sizes, int is_pointer,
+                           int pointer_depth, char* init_value) {
+    global_declarations[global_decl_count].name = strdup(name);
+    global_declarations[global_decl_count].datatype = datatype ? strdup(datatype) : NULL;
+    global_declarations[global_decl_count].is_static = is_static;
+    global_declarations[global_decl_count].is_array = is_array;
+    global_declarations[global_decl_count].array_dimensions = array_dimensions;
+
+    if (array_sizes && array_dimensions > 0) {
+        global_declarations[global_decl_count].array_sizes = malloc(array_dimensions * sizeof(int));
+        for (int i = 0; i < array_dimensions; i++) {
+            global_declarations[global_decl_count].array_sizes[i] = array_sizes[i];
         }
-        else if (strcmp(node->datatype, "float") == 0) {
-            return "float";
+    } else {
+        global_declarations[global_decl_count].array_sizes = NULL;
+    }
+
+    global_declarations[global_decl_count].is_pointer = is_pointer;
+    global_declarations[global_decl_count].pointer_depth = pointer_depth;
+    global_declarations[global_decl_count].init_value = init_value ? strdup(init_value) : NULL;
+
+    global_decl_count++;
+}
+
+char* get_complete_llvm_type_for_global(GlobalDeclaration* decl) {
+    static char type_str[512];
+
+    if (decl->is_array && decl->array_dimensions > 0) {
+        char base_type[32];
+
+        // Get base type from datatype
+        if (decl->datatype) {
+            if (strcmp(decl->datatype, "int") == 0) strcpy(base_type, "i32");
+            else if (strcmp(decl->datatype, "float") == 0) strcpy(base_type, "float");
+            else if (strcmp(decl->datatype, "double") == 0) strcpy(base_type, "double");
+            else if (strcmp(decl->datatype, "char") == 0) strcpy(base_type, "i8");
+            else strcpy(base_type, "i32");
+        } else {
+            strcpy(base_type, "i32");
         }
-        else if (strcmp(node->datatype, "double") == 0) {
-            return "double";
+
+        // Build array type from innermost to outermost
+        char temp[512];
+        if (decl->array_sizes && decl->array_dimensions > 0 && decl->array_sizes[0] > 0) {
+            sprintf(temp, "[%d x %s]", decl->array_sizes[decl->array_dimensions-1], base_type);
+
+            for (int i = decl->array_dimensions-2; i >= 0; i--) {
+                char new_temp[512];
+                sprintf(new_temp, "[%d x %s]", decl->array_sizes[i], temp);
+                strcpy(temp, new_temp);
+            }
+        } else {
+            sprintf(temp, "%s*", base_type);
         }
-        else if (strcmp(node->datatype, "char") == 0 ||
-                 strcmp(node->datatype, "unsigned char") == 0) {
-            return "i8";
-        }
-        else if (strcmp(node->datatype, "bool") == 0) {
-            return "i1";
-        }
-        else if (strcmp(node->datatype, "void") == 0) {
-            return "void";
-        }
-        else if (strcmp(node->datatype, "string") == 0 ||
-                 strcmp(node->datatype, "char*") == 0 ||
-                 (node->datatype && strstr(node->datatype, "char*") != NULL)) {
-            return "i8*";
+
+        strcpy(type_str, temp);
+    } else {
+        // Scalar type
+        if (decl->datatype) {
+            if (strcmp(decl->datatype, "int") == 0) strcpy(type_str, "i32");
+            else if (strcmp(decl->datatype, "float") == 0) strcpy(type_str, "float");
+            else if (strcmp(decl->datatype, "double") == 0) strcpy(type_str, "double");
+            else if (strcmp(decl->datatype, "char") == 0) strcpy(type_str, "i8");
+            else if (strcmp(decl->datatype, "void") == 0) strcpy(type_str, "void");
+            else if (strcmp(decl->datatype, "bool") == 0) strcpy(type_str, "i1");
+            else if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0)
+                strcpy(type_str, "i8*");
+            else strcpy(type_str, "i32");
+        } else {
+            strcpy(type_str, "i32");
         }
     }
 
-    // For identifiers, look up in symbol table
-    if (node->type == NODE_IDENTIFIER && node->value) {
-        SymbolEntry* symbol = find_symbol(node->value);
-        if (symbol && symbol->datatype) {
-            return get_llvm_type_from_semantic_for_type(symbol->datatype);
+    return type_str;
+}
+
+void emit_global_declarations() {
+    // Set flag to ensure these go to global storage
+    int old_collecting_flag = collecting_global_ir;
+    collecting_global_ir = 1;
+
+    for (int i = 0; i < global_decl_count; i++) {
+        GlobalDeclaration* decl = &global_declarations[i];
+        char* llvm_type = get_llvm_type_from_semantic_for_type(decl->datatype);
+        char * align_str;
+
+        if(strcmp(llvm_type,"i1")==0)align_str="align 1";
+        else if(strcmp(llvm_type,"i8")==0)align_str="align 1";
+        else if(strcmp(llvm_type,"i16")==0)align_str="align 2";
+        else if(strcmp(llvm_type,"i32")==0)align_str="align 4";
+        else if(strcmp(llvm_type,"i64")==0)align_str="align 8";
+        else if(strcmp(llvm_type,"float")==0)align_str="align 4";
+        else if(strcmp(llvm_type,"double")==0)align_str="align 8";
+        else if(strcmp(llvm_type,"i8*")==0)align_str="align 4";
+        else if(strcmp(llvm_type,"i32*")==0)align_str="align 4";
+        else if(strcmp(llvm_type,"i64*")==0)align_str="align 8";
+
+
+
+        // Handle arrays
+        if (decl->is_array && decl->array_dimensions > 0) {
+            llvm_type = get_complete_llvm_type_for_global(decl);
         }
+
+        // Handle pointers
+        if (decl->is_pointer && decl->pointer_depth > 0) {
+            char temp_type[256];
+            strcpy(temp_type, llvm_type);
+            for (int j = 0; j < decl->pointer_depth; j++) {
+                char new_type[256];
+                sprintf(new_type, "%s*", temp_type);
+                strcpy(temp_type, new_type);
+            }
+            llvm_type = strdup(temp_type);
+        }
+
+        // Emit the global declaration (will be stored in global_ir_lines)
+        if (decl->init_value) {
+            if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) {
+                emit_llvm_ir("@%s = global i8* %s, align 4", decl->name, decl->init_value);
+            } else {
+                emit_llvm_ir("@%s = global %s %s, %s", decl->name, llvm_type, decl->init_value,align_str);
+            }
+        } else {
+            if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) {
+                emit_llvm_ir("@%s = global i8* null, align 4", decl->name);
+            } else {
+                emit_llvm_ir("@%s = global %s zeroinitializer, %s", decl->name, llvm_type,align_str);
+            }
+        }
+
+        // Add to symbol table as global
+        add_symbol_with_type(decl->name, 1, decl->datatype, decl->is_array,
+                           decl->array_dimensions, decl->array_sizes,
+                           decl->is_pointer, decl->pointer_depth);
     }
 
-    return "i32"; // Default fallback
+    // Restore the original collecting flag
+    collecting_global_ir = old_collecting_flag;
 }
 
 
+
+int is_global_scope() {
+    return strcmp(current_function, "") == 0;
+}
+
+// Helper function to get format specifier for a node
+char* get_format_specifier_for_node(ASTNode* node) {
+    if (!node) return "%d"; // default
+
+    //char* llvm_type = get_complete_llvm_type(node);
+
+    if (strcmp(node->datatype, "int") == 0) return "%d";
+    else if (strcmp(node->datatype, "unsigned int") == 0) return "%u";
+    else if (strcmp(node->datatype, "short") == 0) return "%hd";
+    else if (strcmp(node->datatype, "unsigned short") == 0) return "%hu";
+    else if (strcmp(node->datatype, "long") == 0 || strcmp(node->datatype, "long int") == 0) return "%ld";
+    else if (strcmp(node->datatype, "unsigned long") == 0) return "%lu";
+    else if (strcmp(node->datatype, "long long") == 0) return "%lld";
+    else if (strcmp(node->datatype, "unsigned long long") == 0) return "%llu";
+
+    else if (strcmp(node->datatype, "float") == 0) return "%f";
+    else if (strcmp(node->datatype, "double") == 0) return "%lf";
+    else if (strcmp(node->datatype, "char") == 0) return "%c";
+    else if (strcmp(node->datatype, "unsigned char") == 0) return "%c";
+
+    else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) return "%s";
+    else if (strcmp(node->datatype, "void*") == 0) return "%p";
+    else if (strcmp(node->datatype, "bool") == 0) return "%d"; // bool as int
+    else return "%d"; // default
+}
+
+// Helper function to generate format string for multiple arguments
+char* generate_format_string_for_arguments(ASTNode* args_node) {
+    if (!args_node || args_node->type != NODE_ARG_LIST || !args_node->child) {
+        return strdup("");
+    }
+
+    char format_str[1024] = "";
+    ASTNode* arg = args_node->child;
+    int first = 1;
+
+    while (arg) {
+        if (!first) strcat(format_str, " ");
+
+        char* specifier = get_format_specifier_for_node(arg);
+        strcat(format_str, specifier);
+
+        first = 0;
+        arg = arg->next;
+    }
+
+    return strdup(format_str);
+}
+
+// Helper function to convert value to appropriate type for I/O
+char* convert_value_for_io(char* value, char* from_type, char* to_type) {
+    if (!value || !from_type || !to_type) return value;
+
+    // If types match, no conversion needed
+    if (strcmp(from_type, to_type) == 0) return value;
+
+    char* result = generate_temp();
+
+    // Handle boolean to integer conversion
+    if (value[0] == '!' && strcmp(to_type, "i32") == 0) {
+        emit_llvm_ir("  %s = zext i1 %s to i32", result, value + 1);
+        return result;
+    }
+
+    // Handle integer to float conversion
+    if (strcmp(from_type, "i32") == 0 && strcmp(to_type, "float") == 0) {
+        emit_llvm_ir("  %s = sitofp i32 %s to float", result, value);
+        return result;
+    }
+
+    // Handle float to double conversion
+    if (strcmp(from_type, "float") == 0 && strcmp(to_type, "double") == 0) {
+        emit_llvm_ir("  %s = fpext float %s to double", result, value);
+        return result;
+    }
+
+    // Handle double to float conversion
+    if (strcmp(from_type, "double") == 0 && strcmp(to_type, "float") == 0) {
+        emit_llvm_ir("  %s = fptrunc double %s to float", result, value);
+        return result;
+    }
+
+    // Default: no conversion
+    return value;
+}
+
+// Enhanced string literal processing
+char* process_string_literal_for_io(ASTNode* node) {
+    if (!node || node->type != NODE_LITERAL) return NULL;
+
+    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+        return get_literal_value_for_llvm(node);
+    }
+    return NULL;
+}
+
+// Helper function to handle array/pointer arguments for I/O
+char* handle_array_pointer_for_io(ASTNode* node) {
+    if (!node) return NULL;
+
+    // Handle string literals
+
+
+    // Handle string variables
+
+    // Handle pointer dereference for strings
+    if (node->type == NODE_UNARY_OP && strcmp(node->op, "*") == 0) {
+        ASTNode* operand = node->left;
+        if (operand && operand->datatype &&
+            (strstr(operand->datatype, "char*") != NULL || strstr(operand->datatype, "string") != NULL)) {
+            return generate_llvm_ir_from_ast(operand);
+        }
+    }
+
+    return NULL;
+}
+
+// In the array/pointer handling section, add support for array element access
+char* handle_array_element_for_io(ASTNode* node,char * element_value) {
+    if (!node || node->type != NODE_INDEX) return NULL;
+
+
+
+    // Generate the code to get the array element value
+
+    if (!element_value) return NULL;
+
+    // For character arrays, we might need to handle individual characters
+    ASTNode* base_array = node->child;
+    while(base_array&&base_array->type==NODE_INDEX)base_array=base_array->child;
+    if (base_array && base_array->type == NODE_IDENTIFIER) {
+        SymbolEntry* symbol = find_symbol(base_array->value);
+        if (symbol && strcmp(symbol->datatype, "char") == 0) {
+            // Character array element - promote to i32 for printf
+            char* promoted = generate_temp();
+            emit_llvm_ir("  %s = zext i8 %s to i32", promoted, element_value);
+            free(element_value);
+            return promoted;
+        }
+    }
+
+    return element_value;
+}
 
 // Enhanced helper function to load a variable value if it's an identifier
 char* load_variable_if_needed(ASTNode* node, char* name) {
     if (node->type == NODE_IDENTIFIER) {
         char* result = generate_temp();
-        char* llvm_type = get_llvm_type_from_semantic(node);
+        char* llvm_type = get_complete_llvm_type(node);
 
         // Check if this is a static/global variable
         SymbolEntry* symbol = find_symbol(name);
+        SymbolEntry* symbol2=find_symbol(strcat(strcat(current_function,"."),name));
         if (symbol && symbol->is_static) {
             emit_llvm_ir("  %s = load %s, %s* @%s", result, llvm_type, llvm_type, name);
-        } else {
+        } else if(symbol2&&symbol2->is_static){
+          emit_llvm_ir("  %s = load %s, %s* @%s", result, llvm_type, llvm_type,symbol2->name);
+        }
+        else {
             emit_llvm_ir("  %s = load %s, %s* %%%s", result, llvm_type, llvm_type, name);
         }
         return result;
@@ -4498,6 +5145,41 @@ char* find_parameter_name(ASTNode* param_node) {
     return NULL;
 }
 
+// Function to emit all stored IR in correct order
+void emit_all_stored_ir() {
+    // 1. Emit global declarations and string constants first
+    for (int i = 0; i < global_ir_count; i++) {
+        printf("%s\n", global_ir_lines[i].ir_line);
+    }
+
+    // 2. Emit other IR (function declarations, typedefs, etc.)
+    for (int i = 0; i < other_ir_count; i++) {
+        printf("%s\n", other_ir_lines[i].ir_line);
+    }
+
+    // 3. Emit function definitions
+    for (int i = 0; i < function_ir_count; i++) {
+        printf("%s\n", function_ir_lines[i].ir_line);
+    }
+}
+
+// Function to free all stored IR
+void free_stored_ir() {
+    for (int i = 0; i < global_ir_count; i++) {
+        free(global_ir_lines[i].ir_line);
+    }
+    for (int i = 0; i < function_ir_count; i++) {
+        free(function_ir_lines[i].ir_line);
+    }
+    for (int i = 0; i < other_ir_count; i++) {
+        free(other_ir_lines[i].ir_line);
+    }
+
+    global_ir_count = 0;
+    function_ir_count = 0;
+    other_ir_count = 0;
+}
+
 /* ==================== SEMANTIC ANALYSIS INTEGRATION ==================== */
 
 
@@ -4505,11 +5187,11 @@ char* find_parameter_name(ASTNode* param_node) {
 // Helper function to handle array types
 char* get_llvm_array_type(ASTNode* node) {
     if (!node || !node->is_array || node->array_dimensions == 0) {
-        return get_llvm_type_from_semantic(node);
+        return get_complete_llvm_type(node);
     }
 
     // Build array type string
-    char* base_type = get_llvm_type_from_semantic(node);
+    char* base_type = get_complete_llvm_type(node);
     char array_type[256] = "";
 
     if (node->array_sizes && node->array_dimensions > 0) {
@@ -4527,12 +5209,43 @@ char* get_llvm_array_type(ASTNode* node) {
 
     return strdup(array_type);
 }
+char* get_index_value(ASTNode* index_node) {
+    if (!index_node) return "0";
+
+    // If it's a literal, return the value directly
+    if (index_node->type == NODE_LITERAL) {
+        return strdup(index_node->value);
+    }
+
+    // Otherwise generate the IR
+    return generate_llvm_ir_from_ast(index_node);
+}
+
+// Helper function to process variable arguments in function body
+void process_varargs_function_body(ASTNode* body_node, int named_param_count) {
+    if (!body_node) return;
+
+    // This function would be called from NODE_FUNCTION_DEF case
+    // to help set up the variable arguments processing
+
+    // Look for va_list, va_start, va_arg, va_end usage in the function body
+    // and ensure they're properly handled
+    ASTNode* stmt = body_node->child;
+    while (stmt) {
+        // Process each statement looking for va_* operations
+        if (stmt->type == NODE_VA_START || stmt->type == NODE_VA_ARG ||
+            stmt->type == NODE_VA_END || stmt->type == NODE_VA_LIST_TYPE) {
+            generate_llvm_ir_from_ast(stmt);
+        }
+        stmt = stmt->next;
+    }
+}
 
 // Helper function to handle pointer types
 char* get_llvm_pointer_type(ASTNode* node) {
     if (!node) return "i8*"; // Default to generic pointer
 
-    char* base_type = get_llvm_type_from_semantic(node);
+    char* base_type = get_complete_llvm_type(node);
     char pointer_type[256] = "";
 
     if (node->is_pointer && node->pointer_depth > 0) {
@@ -4550,28 +5263,70 @@ char* get_llvm_pointer_type(ASTNode* node) {
 }
 
 char* get_llvm_base_type(char* datatype) {
-    if (strstr(datatype, "int")) return "i32";
-    if (strstr(datatype, "float")) return "float";
-    if (strstr(datatype, "double")) return "double";
-    if (strstr(datatype, "char")) return "i8";
-    if (strstr(datatype, "void")) return "void";
-    if (strstr(datatype, "bool")) return "i1";
-    if (strstr(datatype, "string") || strstr(datatype, "char*")) return "i8*";
+
+    if (strcmp(datatype, "int") == 0 ||
+                strcmp(datatype, "unsigned int") == 0 ||
+                strcmp(datatype, "short") == 0 ||
+                strcmp(datatype, "static int") == 0) {
+                return "i32";
+            }
+ else if(strcmp(datatype, "long") == 0 ||
+                   strcmp(datatype, "long int") == 0 ||
+                   strcmp(datatype, "long long") == 0
+            ){
+            return "i64";
+            }
+      else if (strcmp(datatype, "float") == 0||strcmp(datatype, "unsigned float") == 0 ) {
+                return "float";
+            }
+            else if (strcmp(datatype, "double") == 0) {
+
+                return "double";
+            }
+            else if (strcmp(datatype, "char") == 0 ||
+                     strcmp(datatype, "unsigned char") == 0) {
+
+                return "i8";
+            }
+            else if (strcmp(datatype, "bool") == 0) {
+                return "i1";
+            }
+            else if (strcmp(datatype, "void") == 0) {
+                return "void";
+            }
+            else if (strcmp(datatype, "string") == 0 ||
+                     strcmp(datatype, "char*") == 0 ||
+                     (datatype && strstr(datatype, "char*") != NULL)) {
+                return "i8*";
+            }
+            else if(strcmp(datatype, "unknown")==0){
+            return "ERROR";
+            }
     return "i32"; // default
 }
 
 char* get_llvm_pointer_base_type(char* llvm_type) {
-    // Remove the '*' from the end to get base type
+    if (!llvm_type) return "i32";
+
     static char base_type[256];
     strcpy(base_type, llvm_type);
-    char* star_pos = strrchr(base_type, '*');
-    if (star_pos) {
-        *star_pos = '\0';
-        // Remove trailing space if present
-        if (star_pos > base_type && *(star_pos-1) == ' ') {
-            *(star_pos-1) = '\0';
+
+    // Remove ONE trailing '*' character
+    int len = strlen(base_type);
+    if (len > 0 && base_type[len-1] == '*') {
+        base_type[len-1] = '\0';
+        // Also remove any trailing space
+        len = strlen(base_type);
+        if (len > 0 && base_type[len-1] == ' ') {
+            base_type[len-1] = '\0';
         }
     }
+
+    // If we removed everything, return default type
+    if (strlen(base_type) == 0) {
+        strcpy(base_type, "i32");
+    }
+
     return base_type;
 }
 
@@ -4584,53 +5339,77 @@ char* get_complete_llvm_type(ASTNode* node) {
         return type_str;
     }
 
+// Handle pointers FIRST (highest priority)
+
+
     // Handle multi-dimensional arrays
-    if (node->is_array && node->array_dimensions > 0) {
+    // Handle multi-dimensional arrays
+    if (node->is_array&& node->array_dimensions>0) {
         char base_type[32];
 
         // Get base type from datatype
         if (node->datatype) {
-            if (strcmp(node->datatype, "int") == 0) strcpy(base_type, "i32");
+             if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "unsigned int") == 0) strcpy(base_type, "i32");
+            else if (strcmp(node->datatype, "unsigned float") == 0) strcpy(base_type, "float");
+            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0
+                        || strcmp(node->datatype, "long") == 0) strcpy(base_type, "i64");
+
             else if (strcmp(node->datatype, "float") == 0) strcpy(base_type, "float");
-            else if (strcmp(node->datatype, "double") == 0) strcpy(base_type, "double");
-            else if (strcmp(node->datatype, "char") == 0) strcpy(base_type, "i8");
-            else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) strcpy(base_type, "i8");
+            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0) strcpy(base_type, "double");
+
+            else if (strcmp(node->datatype, "char") == 0 || strcmp(node->datatype, "unsigned char") == 0) strcpy(base_type, "i8");
+            else if (strcmp(node->datatype, "void") == 0) strcpy(base_type, "void");
+             else if (strcmp(node->datatype, "bool") == 0) strcpy(base_type, "i1");
+            else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) strcpy(base_type, "i8*");
+
             else strcpy(base_type, "i32");
         } else {
             strcpy(base_type, "i32");
         }
 
-        // Build array type from dimensions (innermost to outermost)
+        // Build array type from innermost to outermost
         char temp[512];
-        strcpy(temp, base_type);
+        if (node->array_sizes && node->array_dimensions > 0 && node->array_sizes[0] > 0) {
+            sprintf(temp, "[%d x %s]", node->array_sizes[node->array_dimensions-1], base_type);
 
-        for (int i = node->array_dimensions - 1; i >= 0; i--) {
-            char new_temp[512];
-            if (node->array_sizes && i < node->array_dimensions && node->array_sizes[i] > 0) {
+            // Handle multi-dimensional arrays
+            for (int i = node->array_dimensions-2; i >=0; i--) {
+                char new_temp[512];
                 sprintf(new_temp, "[%d x %s]", node->array_sizes[i], temp);
-            } else {
-                sprintf(new_temp, "[0 x %s]", temp); // incomplete array
+                strcpy(temp, new_temp);
             }
-            strcpy(temp, new_temp);
+        } else {
+            // Dynamic array - use pointer
+            sprintf(temp, "%s*", base_type);
         }
 
         strcpy(type_str, temp);
-    } else if (node->is_pointer && node->pointer_depth > 0) {
-        // Pointer type
-        char* base_type = get_llvm_base_type(node->datatype);
-        strcpy(type_str, base_type);
-        for (int i = 0; i < node->pointer_depth; i++) {
-            char temp[512];
-            sprintf(temp, "%s*", type_str);
-            strcpy(type_str, temp);
-        }
-    } else {
+
+    }else  if (node->is_pointer && node->pointer_depth > 0) {
+                  printf("the ptr for llvm type is : %d \n",node->pointer_depth);
+                  char* base_type = get_llvm_base_type(node->datatype);
+                  strcpy(type_str, base_type);
+                  for (int i = 0; i < node->pointer_depth; i++) {
+                      char temp[512];
+                      sprintf(temp, "%s*", type_str);
+                      strcpy(type_str, temp);
+                  }
+                  printf("got type : %s  \n",type_str);
+                  return type_str;
+              }
+     else {
         // Scalar type
         if (node->datatype) {
-            if (strcmp(node->datatype, "int") == 0) strcpy(type_str, "i32");
+            if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "unsigned int") == 0 || strcmp(node->datatype, "static int") == 0) strcpy(type_str, "i32");
+            else if (strcmp(node->datatype, "unsigned float") == 0) strcpy(type_str, "float");
+
+            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0
+            || strcmp(node->datatype, "long") == 0) strcpy(type_str, "i64");
+
             else if (strcmp(node->datatype, "float") == 0) strcpy(type_str, "float");
-            else if (strcmp(node->datatype, "double") == 0) strcpy(type_str, "double");
-            else if (strcmp(node->datatype, "char") == 0) strcpy(type_str, "i8");
+            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0) strcpy(type_str, "double");
+
+            else if (strcmp(node->datatype, "char") == 0 || strcmp(node->datatype, "unsigned char") == 0) strcpy(type_str, "i8");
             else if (strcmp(node->datatype, "void") == 0) strcpy(type_str, "void");
             else if (strcmp(node->datatype, "bool") == 0) strcpy(type_str, "i1");
             else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) strcpy(type_str, "i8*");
@@ -4639,8 +5418,128 @@ char* get_complete_llvm_type(ASTNode* node) {
             strcpy(type_str, "i32");
         }
     }
-
     return type_str;
+}
+
+// Generate local static variable declarations at global scope
+// Generate local static variable declarations at global scope
+void generate_local_static_declaration(ASTNode* node) {
+    if (!node || node->type != NODE_VARIABLE_DECL || !node->is_static) return;
+    if (strcmp(current_function, "") == 0) return; // Skip global statics (handled elsewhere)
+
+    ASTNode* type_node = node->child;
+    ASTNode* decl_node = type_node ? type_node->next : NULL;
+
+    if (!decl_node) return;
+
+    char* var_name = NULL;
+    char* llvm_type = get_complete_llvm_type(node);
+
+    // Extract variable name
+    if (decl_node->type == NODE_IDENTIFIER) {
+        var_name = decl_node->value;
+    } else if (decl_node->type == NODE_ASSIGNMENT && decl_node->left) {
+        if (decl_node->left->type == NODE_IDENTIFIER) {
+            var_name = decl_node->left->value;
+        } else if (decl_node->left->type == NODE_INDEX) {
+            // Array declaration - get base identifier
+            ASTNode* current = decl_node->left;
+            while (current && current->type == NODE_INDEX) {
+                if (current->child && current->child->type == NODE_IDENTIFIER) {
+                    var_name = current->child->value;
+                    break;
+                }
+                current = current->child;
+            }
+        }
+    }
+
+    if (!var_name) return;
+
+    // Generate mangled name for local static variable
+    char mangled_name[128];
+    sprintf(mangled_name, "%s.%s", current_function, var_name);
+
+    // Check if this static variable has already been declared
+    SymbolEntry* existing_symbol = find_symbol(mangled_name);
+
+    if (!existing_symbol) {
+        // For global initialization, we can only use CONSTANT values, not register values
+        // So we need to handle initialization differently for globals vs locals
+        if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+            // Check if the initializer is a constant literal
+            if (decl_node->right->type == NODE_LITERAL) {
+                // Use the literal value directly for global initialization
+                char* init_value = get_literal_value_for_llvm(decl_node->right);
+                if (init_value) {
+                    // Handle string type specifically
+                    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                        emit_llvm_ir("@%s = internal global i8* %s", mangled_name, init_value);
+                    } else {
+                        emit_llvm_ir("@%s = internal global %s %s, align 4", mangled_name, llvm_type, init_value);
+                    }
+                    free(init_value);
+                } else {
+                    // Default initialization for constants
+                    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                        emit_llvm_ir("@%s = internal global i8* null", mangled_name);
+                    } else {
+                        emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+                    }
+                }
+            } else {
+                // Non-constant initializer - initialize to zero and handle runtime initialization
+                if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                    emit_llvm_ir("@%s = internal global i8* null", mangled_name);
+                } else {
+                    emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+                }
+                // Store the flag that this static needs runtime initialization
+                // We'll handle this during the function processing
+            }
+        } else {
+            // No initializer - zero initialize
+            if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                emit_llvm_ir("@%s = internal global i8* null", mangled_name);
+            } else {
+                emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+            }
+        }
+
+        // Add to symbol table with the mangled name
+        add_symbol_with_type(mangled_name, 1, node->datatype,
+                           node->is_array, node->array_dimensions, node->array_sizes,
+                           node->is_pointer, node->pointer_depth);
+    }
+
+    // Also add the original name to symbol table pointing to the static variable
+    add_symbol_with_type(var_name, 1, node->datatype,
+                       node->is_array, node->array_dimensions, node->array_sizes,
+                       node->is_pointer, node->pointer_depth);
+}
+
+// Helper function to process local static variable declarations in functions
+void process_local_static_declarations(ASTNode* node) {
+    if (!node) return;
+
+    // Process current node if it's a local static variable declaration
+    if (node->type == NODE_VARIABLE_DECL && node->is_static && strcmp(current_function, "") != 0) {
+        generate_local_static_declaration(node);
+    }
+
+    // Recursively process children
+    ASTNode* child = node->child;
+    while (child) {
+        process_local_static_declarations(child);
+        child = child->next;
+    }
+
+    // Process siblings
+    ASTNode* sibling = node->next;
+    while (sibling) {
+        process_local_static_declarations(sibling);
+        sibling = sibling->next;
+    }
 }
 
 // Helper to get literal value for LLVM
@@ -4649,16 +5548,13 @@ char* get_literal_value_for_llvm(ASTNode* node) {
 
     if (node->type == NODE_LITERAL) {
         if (strcmp(node->datatype, "string") == 0) {
-            // String literal - create global constant
-            static int string_counter = 0;
-            char string_name[32];
-            sprintf(string_name, ".str%d", string_counter++);
+            // String literal - create global constant (but collect it, don't emit immediately)
+            char* string_name = generate_string_constant_name();
 
-            // Calculate actual string length (without quotes)
+            // Calculate actual string length (without quotes) and process escape sequences
             char* string_content = node->value;
             int len = strlen(string_content);
 
-            // Remove surrounding quotes and handle escape sequences
             char processed_string[1024] = {0};
             int j = 0;
             int in_string = 0;
@@ -4689,14 +5585,12 @@ char* get_literal_value_for_llvm(ASTNode* node) {
             }
             processed_string[j] = '\0';
 
-            // Emit global string constant with proper length
-            int actual_length = j + 1; // Include null terminator
-            emit_llvm_ir("@%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"",
-                         string_name, actual_length, processed_string);
+            // Add to string constants collection
+            add_string_constant(string_name, processed_string, j + 1); // Include null terminator
 
             char* result = malloc(128);
             sprintf(result, "getelementptr inbounds ([%d x i8], [%d x i8]* @%s, i64 0, i64 0)",
-                    actual_length, actual_length, string_name);
+                    j + 1, j + 1, string_name);
             return result;
         }
         else if (strcmp(node->datatype, "char") == 0) {
@@ -4731,10 +5625,20 @@ char* get_literal_value_for_llvm(ASTNode* node) {
     return "0";
 }
 
+// Helper function to get mangled name for local static variables
+char* get_local_static_name(char* var_name) {
+    if (strcmp(current_function, "") == 0) {
+        return strdup(var_name); // Global scope - no mangling needed
+    }
+
+    char* mangled_name = malloc(strlen(current_function) + strlen(var_name) + 2);
+    sprintf(mangled_name, "%s.%s", current_function, var_name);
+    return mangled_name;
+}
 // Enhanced array type generation for MIPS compatibility
 char* get_array_llvm_type(ASTNode* node) {
     if (!is_array_type(node)) {
-        return get_llvm_type_from_semantic(node);
+        return get_complete_llvm_type(node);
     }
 
     static char array_type[512];
@@ -4818,7 +5722,7 @@ void initialize_array(char* array_name, char* array_type, ASTNode* init_node, AS
                                 elem_ptr, array_type, array_type, array_name, index);
 
                     // Store element value with proper type
-                    char* element_type = get_llvm_type_from_semantic(element);
+                    char* element_type = get_complete_llvm_type(element);
                     char* store_value = element_value;
 
                     // Handle boolean values
@@ -4939,6 +5843,8 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
     if (!init_node || init_node->type != NODE_INIT_LIST) return;
 
     char* array_type = get_complete_llvm_type(array_decl);
+    char * array_type_buffer=strdup(array_type);
+    printf("got array type %s \n",array_type);
 
     // Recursive helper function for nested initialization
     void init_nested(ASTNode* list_node, char* base_ptr, int* indices, int depth, int max_depth) {
@@ -4966,12 +5872,12 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
                         sprintf(temp, ", i32 %d", indices[i]);
                         strcat(indices_str, temp);
                     }
-
+                    printf("final array type %s \n",array_type);
                     emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, %s",
-                                elem_ptr, array_type, array_type, array_name, indices_str);
+                                elem_ptr, array_type_buffer, array_type_buffer, array_name, indices_str);
 
                     // Get proper type for the element
-                    char* element_type = get_llvm_type_from_semantic(element);
+                    char* element_type = get_complete_llvm_type(element);
                     char* store_value = element_value;
 
                     // Handle boolean values
@@ -4996,6 +5902,7 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
     int max_depth = array_decl->array_dimensions;
     int indices[max_depth];
     init_nested(init_node, array_name, indices, 0, max_depth);
+    free(array_type_buffer);
 }
 
 char* generate_llvm_ir_from_ast(ASTNode* node) {
@@ -5004,7 +5911,7 @@ char* generate_llvm_ir_from_ast(ASTNode* node) {
     switch (node->type) {
 
 case NODE_LITERAL: {
-    char* llvm_type = get_llvm_type_from_semantic(node);
+    char* llvm_type = get_complete_llvm_type(node);
     char* literal_value = get_literal_value_for_llvm(node);
 
     if (strcmp(llvm_type, "i8*") == 0) {
@@ -5035,197 +5942,384 @@ case NODE_LITERAL: {
 }
 
 case NODE_VARIABLE_DECL: {
-    ASTNode* type_node = node->child;
-    ASTNode* decl_node = type_node ? type_node->next : NULL;
+            ASTNode* type_node = node->child;
+            ASTNode* decl_node = type_node ? type_node->next : NULL;
 
-    if (decl_node) {
-        char* var_name = NULL;
-        ASTNode* actual_decl_node = decl_node;
+            if (decl_node) {
+                char* var_name = NULL;
+                char* init_value = NULL;
+                ASTNode* actual_decl_node = decl_node;
 
-        // Extract variable name and handle different declarator types
-        if (decl_node->type == NODE_IDENTIFIER) {
-            var_name = decl_node->value;
-        }
-        else if (decl_node->type == NODE_INDEX) {
-            // Array declaration - get the identifier from the index node
-            ASTNode* array_base = decl_node->child;
-            if (array_base && array_base->type == NODE_IDENTIFIER) {
-                var_name = array_base->value;
-            }
-            actual_decl_node = array_base;
-        }
-        else if (decl_node->type == NODE_UNARY_OP && strcmp(decl_node->op, "*") == 0) {
-            // Pointer declaration - get the identifier from the unary node
-            ASTNode* pointer_base = decl_node->child;
-            if (pointer_base && pointer_base->type == NODE_IDENTIFIER) {
-                var_name = pointer_base->value;
-            }
-            actual_decl_node = pointer_base;
-        }
-        else if (decl_node->type == NODE_ASSIGNMENT && decl_node->left) {
-            // Assignment during declaration - handle the left side
-            ASTNode* left_node = decl_node->left;
-            if (left_node->type == NODE_IDENTIFIER) {
-                var_name = left_node->value;
-            }
-            else if (left_node->type == NODE_INDEX) {
-                // Array element assignment in declaration - get base identifier
-                ASTNode* current = left_node;
-                while (current && current->type == NODE_INDEX) {
-                    if (current->child && current->child->type == NODE_IDENTIFIER) {
-                        var_name = current->child->value;
-                        break;
-                    }
-                    current = current->child;
+                // Extract variable name and handle different declarator types
+                if (decl_node->type == NODE_IDENTIFIER) {
+                    var_name = decl_node->value;
                 }
-            }
-            else if (left_node->type == NODE_UNARY_OP && strcmp(left_node->op, "*") == 0) {
-                // Pointer dereference assignment in declaration
-                ASTNode* pointer_base = left_node->child;
-                if (pointer_base && pointer_base->type == NODE_IDENTIFIER) {
-                    var_name = pointer_base->value;
-                }
-            }
-            actual_decl_node = left_node;
-        }
-
-        if (var_name) {
-            char* llvm_type = get_complete_llvm_type(node);
-
-            // Handle string type specifically
-            if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
-                if (node->is_static) {
-                    // Global string
-                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                        char* init_value = generate_llvm_ir_from_ast(decl_node->right);
-                        emit_llvm_ir("@%s = internal global i8* %s", var_name, init_value);
-                        free(init_value);
-                    } else {
-                        emit_llvm_ir("@%s = internal global i8* null", var_name);
-                    }
-                } else {
-                    // Local string - allocate pointer
-                    emit_llvm_ir("  %%%s = alloca i8*, align 8", var_name);
-
-                    // Initialize if needed
-                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                        char* init_value = generate_llvm_ir_from_ast(decl_node->right);
-                        emit_llvm_ir("  store i8* %s, i8** %%%s", init_value, var_name);
-                        free(init_value);
-                    } else {
-                        emit_llvm_ir("  store i8* null, i8** %%%s", var_name);
-                    }
-                }
-            }
-            // Handle static variables
-            else if (node->is_static) {
-                if (strcmp(current_function, "") == 0) {
-                    // Global static with alignment
-                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                        char* init_value = generate_llvm_ir_from_ast(decl_node->right);
-                        emit_llvm_ir("@%s = internal global %s %s, align 4", var_name, llvm_type, init_value);
-                        free(init_value);
-
-                        // For arrays with initializers, also initialize the values
-                        if (node->is_array && node->array_dimensions > 0 &&
-                            decl_node->right->type == NODE_INIT_LIST) {
-                            initialize_multi_dim_array(var_name, node, decl_node->right);
+                else if (decl_node->type == NODE_INDEX) {
+                    // Array declaration - get the identifier from the index node
+                    ASTNode* array_base = decl_node->child;
+                    while(array_base){
+                        if (array_base && array_base->type == NODE_IDENTIFIER) {
+                            var_name = array_base->value;
+                            break;
                         }
-                    } else {
-                        emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", var_name, llvm_type);
+                        array_base=array_base->child;
                     }
-                } else {
-                    // Local static - would need more complex handling
-                    emit_llvm_ir("  ; static variable %s (complex handling needed)", var_name);
+                    actual_decl_node = array_base;
                 }
-            } else {
-                // Regular local variable - handle arrays and pointers with alignment
-                if (node->is_array) {
-                    // Enhanced multi-dimensional array allocation
-                    if (node->array_sizes && node->array_dimensions > 0) {
-                        // Static multi-dimensional array allocation
-                        emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
+                else if(decl_node->type==NODE_DECLARATOR){
+                    ASTNode* left_left_node=decl_node->child;
+                    if(decl_node->value=="&"){
+                        ASTNode* ch=decl_node->child;
+                        if(ch&&ch->type==NODE_IDENTIFIER){
+                            var_name=ch->value;
+                        }
+                    }
+                    else if (left_left_node->type==NODE_MULTI_PTR) {
+                        // Pointer dereference assignment in declaration
+                        ASTNode* pointer_base;
+                        pointer_base= left_left_node->next;
+                        if (pointer_base && pointer_base->type == NODE_IDENTIFIER) {
+                            var_name = pointer_base->value;
+                        }
+                    }
+                }
+                else if (decl_node->type == NODE_ASSIGNMENT && decl_node->left) {
+                    // Assignment during declaration - handle the left side
+                    ASTNode* left_node = decl_node->left;
 
-                        // Initialize array if there's an initializer
-                        if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                            initialize_multi_dim_array(var_name, node, decl_node->right);
+                    if (left_node->type == NODE_IDENTIFIER) {
+                        var_name = left_node->value;
+                    }
+                    else if (left_node->type == NODE_INDEX) {
+                        // Array element assignment in declaration - get base identifier
+                        ASTNode* current = left_node;
+                        while (current && current->type == NODE_INDEX) {
+                            if (current->child && current->child->type == NODE_IDENTIFIER) {
+                                var_name = current->child->value;
+                                break;
+                            }
+                            current = current->child;
+                        }
+                    }
+                    else if(left_node->type==NODE_DECLARATOR){
+                        ASTNode* left_left_node=left_node->child;
+                        if(left_node->value=="&"){
+                            ASTNode* ch=left_node->child;
+                            if(ch&&ch->type==NODE_IDENTIFIER){
+                                var_name=ch->value;
+                            }
+                        }
+                        else if (left_left_node->type==NODE_MULTI_PTR) {
+                            // Pointer dereference assignment in declaration
+                            ASTNode* pointer_base;
+                            pointer_base= left_left_node->next;
+                            if (pointer_base && pointer_base->type == NODE_IDENTIFIER) {
+                                var_name = pointer_base->value;
+                            }
+                        }
+                    }
+                    actual_decl_node = left_node;
+
+                    // Extract initial value for global declarations
+                    if (strcmp(current_function, "") == 0 && decl_node->right) {
+                        if (decl_node->right->type == NODE_LITERAL) {
+                            init_value = get_literal_value_for_llvm(decl_node->right);
+                        }
+                    }
+                }
+
+                if (var_name) {
+                    // Check if we're at global scope (not inside any function)
+                    if (strcmp(current_function, "") == 0) {
+                        // This is a global variable - add to global declarations collection
+                        add_global_declaration(var_name, node->datatype, node->is_static,
+                                             node->is_array, node->array_dimensions, node->array_sizes,
+                                             node->is_pointer, node->pointer_depth, init_value);
+
+                        // Add to symbol table immediately for proper lookup
+                        add_symbol_with_type(var_name, node->is_static, node->datatype,
+                                           node->is_array, node->array_dimensions, node->array_sizes,
+                                           node->is_pointer, node->pointer_depth);
+
+                        // Don't emit any code here - globals will be emitted later
+                        if (init_value) free(init_value);
+                        return NULL;
+                    }
+                    else {
+                        // This is a local variable - use existing local variable handling
+                        char* llvm_type = get_complete_llvm_type(node);
+
+                        // Handle LOCAL STATIC variables
+                        if (node->is_static && strcmp(current_function, "") != 0) {
+                            // Local static variable - use global storage with internal linkage
+                            char static_var_name[128];
+                            sprintf(static_var_name, "%s.%s", current_function, var_name);
+
+                            // Check if this static variable has already been declared
+                            SymbolEntry* existing_symbol = find_symbol(static_var_name);
+
+                            if (!existing_symbol) {
+                                // First time encountering this static variable - declare it
+                                if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                    char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    if (local_init_value) {
+                                        // Handle string type specifically
+                                        if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                                            collecting_global_ir=1;
+                                            emit_llvm_ir("@%s = internal global i8* %s", static_var_name, local_init_value);
+                                            collecting_global_ir=0;
+                                        } else {
+                                            collecting_global_ir=1;
+                                            emit_llvm_ir("@%s = internal global %s %s, align 4", static_var_name, llvm_type, local_init_value);
+                                            collecting_global_ir=0;
+                                        }
+                                        free(local_init_value);
+                                    } else {
+                                        // Default initialization
+                                        if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                                            collecting_global_ir=1;
+                                            emit_llvm_ir("@%s = internal global i8* null", static_var_name);
+                                            collecting_global_ir=0;
+                                        } else {
+                                            collecting_global_ir=1;
+                                            emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", static_var_name, llvm_type);
+                                            collecting_global_ir=0;
+                                        }
+                                    }
+                                } else {
+                                    // No initializer - zero initialize
+                                    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                                        collecting_global_ir=1;
+                                        emit_llvm_ir("@%s = internal global i8* null", static_var_name);
+                                        collecting_global_ir=0;
+                                    } else {
+                                        collecting_global_ir=1;
+                                        emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", static_var_name, llvm_type);
+                                        collecting_global_ir=0;
+                                    }
+                                }
+
+                                // Add to symbol table with the mangled name
+                                add_symbol_with_type(static_var_name, 1, node->datatype,
+                                                   node->is_array, node->array_dimensions, node->array_sizes,
+                                                   node->is_pointer, node->pointer_depth);
+                            }
+
+                            // Also add the original name to symbol table pointing to the static variable
+                            add_symbol_with_type(var_name, 1, node->datatype,
+                                               node->is_array, node->array_dimensions, node->array_sizes,
+                                               node->is_pointer, node->pointer_depth);
+
+                        }
+                        // Handle string type specifically
+                        else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
+                            if (node->is_static) {
+                                // Global string
+                                if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                    char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    collecting_global_ir=1;
+                                    emit_llvm_ir("@%s = internal global i8* %s", var_name, local_init_value);
+                                    collecting_global_ir=0;
+                                    free(local_init_value);
+                                } else {
+                                    collecting_global_ir=1;
+                                    emit_llvm_ir("@%s = internal global i8* null", var_name);
+                                    collecting_global_ir=0;
+                                }
+                            } else {
+                                // Local string - allocate pointer
+                                emit_llvm_ir("  %%%s = alloca i8*, align 8", var_name);
+
+                                // Initialize if needed
+                                if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                    char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    emit_llvm_ir("  store i8* %s, i8** %%%s", local_init_value, var_name);
+                                    free(local_init_value);
+                                } else {
+                                    emit_llvm_ir("  store i8* null, i8** %%%s", var_name);
+                                }
+                            }
+                        }
+                        // Handle GLOBAL static variables (existing code)
+                        else if (node->is_static && strcmp(current_function, "") == 0) {
+                            if (strcmp(current_function, "") == 0) {
+                                // Global static with alignment
+                                if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                    char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    collecting_global_ir=1;
+                                    emit_llvm_ir("@%s = internal global %s %s, align 4", var_name, llvm_type, local_init_value);
+                                    collecting_global_ir=0;
+                                    free(local_init_value);
+
+                                    // For arrays with initializers, also initialize the values
+                                    if (node->is_array && node->array_dimensions > 0 &&
+                                        decl_node->right->type == NODE_INIT_LIST) {
+                                        initialize_multi_dim_array(var_name, node, decl_node->right);
+                                    }
+                                } else {
+                                    collecting_global_ir=1;
+                                    emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", var_name, llvm_type);
+                                    collecting_global_ir=0;
+                                }
+                            } else {
+                                // This case should now be handled by the local static code above
+                                emit_llvm_ir("  ; static variable %s (complex handling needed)", var_name);
+                            }
                         } else {
-                            // Zero-initialize the array
-                            initialize_array_to_zero(var_name, node, 0); // 0 for local
+                            // Regular local variable - handle arrays and pointers with alignment
+                            if (node->is_array) {
+                                // Enhanced multi-dimensional array allocation
+                                if (node->array_sizes && node->array_dimensions > 0) {
+                                    // Static multi-dimensional array allocation
+                                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
+
+                                    // Initialize array if there's an initializer
+                                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                        initialize_multi_dim_array(var_name, node, decl_node->right);
+                                    } else {
+                                        // Zero-initialize the array
+                                        initialize_array_to_zero(var_name, node, 0); // 0 for local
+                                    }
+                                } else {
+                                    // Dynamic array allocation
+                                    char* size_bytes = generate_temp();
+                                    emit_llvm_ir("  %s = mul i32 %s, 4", size_bytes,
+                                                decl_node->right ? generate_llvm_ir_from_ast(decl_node->right) : "10");
+                                    char* malloc_result = generate_temp();
+                                    emit_llvm_ir("  %s = call i8* @malloc(i32 %s)", malloc_result, size_bytes);
+                                    emit_llvm_ir("  %%%s = bitcast i8* %s to i32*", var_name, malloc_result);
+                                    free(size_bytes);
+                                    free(malloc_result);
+                                }
+                            } else if (node->is_pointer) {
+                                char * type_buffer = strdup(llvm_type);
+                                // POINTER FIX: Handle pointers specifically
+                                if (node->is_static) {
+                                    // Global pointer
+                                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                        char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                        collecting_global_ir=1;
+                                        emit_llvm_ir("@%s = internal global %s %s", var_name, type_buffer, local_init_value);
+                                        collecting_global_ir=0;
+                                        free(local_init_value);
+                                    } else {
+                                        collecting_global_ir=1;
+                                        emit_llvm_ir("@%s = internal global %s null", var_name, type_buffer);
+                                        collecting_global_ir=0;
+                                    }
+                                } else {
+                                    // Local pointer - allocate space for the pointer itself
+                                    char* base_type = get_llvm_pointer_base_type(strdup(llvm_type));
+                                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, type_buffer);
+
+                                    // Initialize if needed
+                                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                        char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+
+                                        // For pointer assignment, we need to handle different cases:
+                                        if (local_init_value && local_init_value[0] == '%') {
+                                            // If it's a temporary value (address), store it directly
+                                            emit_llvm_ir("  store %s %s, %s* %%%s", type_buffer, local_init_value, type_buffer, var_name);
+                                        } else {
+                                            // For literal addresses or null
+                                            emit_llvm_ir("  store %s %s, %s* %%%s", type_buffer, local_init_value, type_buffer, var_name);
+                                        }
+                                        free(local_init_value);
+                                    } else {
+                                        // Initialize to null if no initial value
+                                        emit_llvm_ir("  store %s null, %s* %%%s", type_buffer, type_buffer, var_name);
+                                    }
+                                }
+                                free(type_buffer);
+                            } else {
+                                // Regular scalar variable with alignment
+                                emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
+
+                                // Handle initialization
+                                if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
+                                    char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    emit_llvm_ir("  store %s %s, %s* %%%s, align 4", llvm_type, local_init_value, llvm_type, var_name);
+                                    free(local_init_value);
+                                }
+                            }
                         }
-                    } else {
-                        // Dynamic array allocation
-                        char* size_bytes = generate_temp();
-                        emit_llvm_ir("  %s = mul i32 %s, 4", size_bytes,
-                                    decl_node->right ? generate_llvm_ir_from_ast(decl_node->right) : "10");
-                        char* malloc_result = generate_temp();
-                        emit_llvm_ir("  %s = call i8* @malloc(i32 %s)", malloc_result, size_bytes);
-                        emit_llvm_ir("  %%%s = bitcast i8* %s to i32*", var_name, malloc_result);
-                        free(size_bytes);
-                        free(malloc_result);
-                    }
-                } else if (node->is_pointer) {
-                    // Pointer allocation with alignment
-                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
 
-                    // If there's an initial assignment, handle it
-                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                        char* init_value = generate_llvm_ir_from_ast(decl_node->right);
-                        char* base_type = get_llvm_pointer_base_type(llvm_type);
-                        emit_llvm_ir("  store %s %s, %s* %%%s, align 4",
-                                    base_type, init_value, base_type, var_name);
-                        free(init_value);
-                    }
-                } else {
-                    // Regular scalar variable with alignment
-                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
-
-                    // Handle initialization
-                    if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
-                        char* init_value = generate_llvm_ir_from_ast(decl_node->right);
-                        emit_llvm_ir("  store %s %s, %s* %%%s, align 4", llvm_type, init_value, llvm_type, var_name);
-                        free(init_value);
+                        // Add to symbol table with type information (for non-local-static cases)
+                        if (!(node->is_static && strcmp(current_function, "") != 0)) {
+                            add_symbol_with_type(var_name, node->is_static, node->datatype,
+                                               node->is_array, node->array_dimensions, node->array_sizes,
+                                               node->is_pointer, node->pointer_depth);
+                        }
                     }
                 }
             }
-
-            // Add to symbol table with type information
-            add_symbol_with_type(var_name, node->is_static, node->datatype,
-                               node->is_array, node->array_dimensions, node->array_sizes,
-                               node->is_pointer, node->pointer_depth);
+            return NULL;
         }
-    }
-    return NULL;
-}
 
 case NODE_IDENTIFIER: {
-    if (!node->value) return NULL;
+            if (!node->value) return NULL;
 
-    SymbolEntry* symbol = find_symbol(node->value);
-    char* llvm_type = get_llvm_type_from_semantic(node);
+            SymbolEntry* symbol = find_symbol(node->value);
+            char* llvm_type = get_complete_llvm_type(node);
 
-    // Handle string type
-    if (symbol && (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0)) {
-        char* result = generate_temp();
-        if (symbol->is_static) {
-            emit_llvm_ir("  %s = load i8*, i8** @%s", result, node->value);
-        } else {
-            emit_llvm_ir("  %s = load i8*, i8** %%%s", result, node->value);
+            // Handle local static variables - check if there's a mangled name
+            if (symbol && symbol->is_static && strcmp(current_function, "") != 0) {
+                char static_var_name[128];
+                sprintf(static_var_name, "%s.%s", current_function, node->value);
+                SymbolEntry* static_symbol = find_symbol(static_var_name);
+                char* result = generate_temp();
+
+                if (static_symbol) {
+                    // Use the mangled static variable name
+                    // Handle string type
+                    if (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0) {
+                        emit_llvm_ir("  %s = load i8*, i8** @%s", result, static_var_name);
+                    } else {
+                        emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, static_var_name);
+                    }
+                }
+                else{
+                    if (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0) {
+                        emit_llvm_ir("  %s = load i8*, i8** @%s", result, symbol->name);
+                    } else {
+                        emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, symbol->name);
+                    }
+                }
+
+                return result;
+            }
+
+            // Handle string type
+            if (symbol && (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0)) {
+                char* result = generate_temp();
+                if (symbol->is_static) {
+                    emit_llvm_ir("  %s = load i8*, i8** @%s", result, node->value);
+                } else {
+                    if(node->is_parameter)
+                        emit_llvm_ir("  %s = load i8*, i8** %%%s.addr", result, node->value);
+                    else
+                        emit_llvm_ir("  %s = load i8*, i8** %%%s", result, node->value);
+                }
+                return result;
+            } else {
+                char* result = generate_temp();
+                // Check if this is a static/global variable
+                if (symbol && symbol->is_static) {
+                    // Direct global variable access (simpler approach)
+                    emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, node->value);
+                } else {
+                    // Local variable access with alignment
+                    if(node->is_parameter)
+                        emit_llvm_ir("  %s = load %s, %s* %%%s.addr, align 4", result, llvm_type, llvm_type, node->value);
+                    else if(node->is_array){
+                        emit_llvm_ir("  %s =  getelementptr inbounds %s, %s* %%%s , i32 0, i32 0", result, llvm_type, llvm_type, node->value);
+                    }
+                    else
+                        emit_llvm_ir("  %s = load %s, %s* %%%s, align 4", result, llvm_type, llvm_type, node->value);
+                }
+                return result;
+            }
         }
-        return result;
-    } else {
-        char* result = generate_temp();
-        // Check if this is a static/global variable
-        if (symbol && symbol->is_static) {
-            // Direct global variable access (simpler approach)
-            emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, node->value);
-        } else {
-            // Local variable access with alignment
-            emit_llvm_ir("  %s = load %s, %s* %%%s, align 4", result, llvm_type, llvm_type, node->value);
-        }
-        return result;
-    }
-}
 
 case NODE_BREAK_STMT: {
     if (current_break_label) {
@@ -5248,82 +6342,86 @@ case NODE_CONTINUE_STMT: {
 }
 
 case NODE_INDEX: {
-    // For arr[i][j], the AST structure is:
-    // INDEX
-    //   INDEX
-    //     IDENTIFIER [arr] (base array)
-    //     IDENTIFIER [i] (first index)
-    //   IDENTIFIER [j] (second index)
-
-    ASTNode* current_index = node;
+    // Handle array element access: arr[i] or arr[i][j] or arr[i][j][k] etc.
+    ASTNode* current = node;
     ASTNode* base_array = NULL;
     char* array_name = NULL;
-    int is_global = 0;
+    SymbolEntry* symbol = NULL;
 
-    // Find the base array and collect all indices
+    // Collect all indices in reverse order (from outermost to innermost)
     ASTNode* indices[10]; // max 10 dimensions
     int index_count = 0;
 
-    while (current_index && current_index->type == NODE_INDEX) {
-        indices[index_count++] = current_index;
+    // Traverse the index chain to find the base array and collect indices
+    while (current && current->type == NODE_INDEX) {
+        indices[index_count++] = current;
+        ASTNode* array_part = current->child;
 
-        if (current_index->child && current_index->child->type == NODE_IDENTIFIER) {
-            base_array = current_index->child;
-            array_name = base_array->value;
-            SymbolEntry* symbol = find_symbol(array_name);
-            is_global = symbol ? symbol->is_static : 0;
+        if (array_part && array_part->type == NODE_IDENTIFIER) {
+            base_array = array_part;
+            array_name = array_part->value;
+            symbol = find_symbol(array_name);
             break;
         }
-        current_index = current_index->child;
+        current = array_part;
     }
 
-    if (!base_array || !array_name) return NULL;
+    if (!base_array || !array_name || !symbol) {
+    printf("array : %s \n",array_name);
+    return NULL;
+    }
 
-    // Generate all index expressions
+    // Generate all index expressions (from outermost to innermost)
     char* index_values[10];
     int actual_index_count = 0;
 
-    for (int i = index_count - 1; i >= 0; i--) {
+    for (int i =index_count-1; i >=0 ; i--) {
         ASTNode* index_node = indices[i]->child ? indices[i]->child->next : NULL;
         if (index_node) {
-            index_values[actual_index_count++] = generate_llvm_ir_from_ast(index_node);
+            index_values[actual_index_count++] = get_index_value(index_node);
         }
     }
 
-    // Build single GEP instruction with all indices
     char* array_type = get_complete_llvm_type(base_array);
-    char* result_ptr = generate_temp();
+    char* element_ptr = generate_temp();
+    char* result = generate_temp();
 
-    // Build indices string for GEP
-    char indices_str[512] = "i32 0";
-    for (int i = 0; i < actual_index_count; i++) {
-        if (index_values[i]) {
-            char temp[64];
-            sprintf(temp, ", i32 %s", index_values[i]);
-            strcat(indices_str, temp);
-        }
-    }
-
-    if (is_global) {
-        // Global array access
+    // Build GEP instruction with all indices
+    if (symbol->is_static) {
+        // Global array
         char* load_temp = generate_temp();
         emit_llvm_ir("  %s = load %s, %s* @%s, align 4", load_temp, array_type, array_type, array_name);
-        emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %s, %s",
-                    result_ptr, array_type, array_type, load_temp, indices_str);
+
+        // Build GEP with all indices
+        char gep_str[512] = "";
+        strcpy(gep_str, "i32 0");
+        for (int i = 0; i <actual_index_count ; i++) {
+            char temp[64];
+            sprintf(temp, ", i32 %s", index_values[i]);
+            strcat(gep_str, temp);
+        }
+
+        emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, %s",
+                     element_ptr, array_type, array_type, load_temp, gep_str);
         free(load_temp);
     } else {
-        // Local array access - single GEP
+        // Local array - build GEP with all indices
+        char gep_str[512] = "";
+        strcpy(gep_str, "i32 0");
+        for (int i =0 ; i <actual_index_count; i++) {
+            char temp[64];
+            sprintf(temp, ", i32 %s", index_values[i]);
+            strcat(gep_str, temp);
+        }
+
         emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, %s",
-                    result_ptr, array_type, array_type, array_name, indices_str);
+                     element_ptr, array_type, array_type, array_name, gep_str);
     }
 
-    // Load the final element value with proper type
-    char* element_type = get_llvm_type_from_semantic(base_array);
-    char* result = generate_temp();
-    emit_llvm_ir("  %s = load %s, %s* %s, align 4", result, element_type, element_type, result_ptr);
+    emit_llvm_ir("  %s = load i32, i32* %s, align 4", result, element_ptr);
 
     // Free temporary values
-    free(result_ptr);
+    free(element_ptr);
     for (int i = 0; i < actual_index_count; i++) {
         if (index_values[i]) free(index_values[i]);
     }
@@ -5422,48 +6520,147 @@ case NODE_INITIALIZER: {
 case NODE_UNARY_OP: {
     if (!node->op || !node->left) return NULL;
 
+    // Handle address-of operator (&)
+    if (strcmp(node->op, "&") == 0) {
+        ASTNode* operand = node->left;
+        if (operand->type == NODE_IDENTIFIER) {
+            SymbolEntry* symbol = find_symbol(operand->value);
+            if (symbol) {
+                char* result = generate_temp();
+                char* operand_type = get_complete_llvm_type(operand);
+                char* pointer_type = malloc(strlen(operand_type) + 2);
+                sprintf(pointer_type, "%s*", operand_type);
+
+                // Only use bitcast if types are different
+                if (strcmp(operand_type, pointer_type) != 0) {
+                    if (symbol->is_static) {
+                        emit_llvm_ir("  %s = bitcast %s* @%s to %s", result,
+                                    operand_type, operand->value, pointer_type);
+                    } else {
+                        emit_llvm_ir("  %s = bitcast %s* %%%s to %s", result,
+                                    operand_type, operand->value, pointer_type);
+                    }
+                } else {
+                    // Same type - just use the address directly
+                    if (symbol->is_static) {
+                        emit_llvm_ir("  %s = bitcast %s* @%s to %s", result,
+                                    operand_type, operand->value, pointer_type);
+                    } else {
+                        emit_llvm_ir("  %s = bitcast %s* %%%s to %s", result,
+                                    operand_type, operand->value, pointer_type);
+                    }
+                }
+
+                free(pointer_type);
+                return result;
+            }
+        }
+        return NULL;
+    }
+
+    // Handle pointer dereference operator (*)
+    else if (strcmp(node->op, "*") == 0) {
+        // Generate the pointer value (this could be a simple identifier or another dereference)
+        char* ptr_value = generate_llvm_ir_from_ast(node->left);
+        if (!ptr_value) return NULL;
+
+        // Get the complete type of the pointer (including pointer levels)
+        char* complete_type = get_complete_llvm_type(node->left);
+
+        // For dereference, we need the type that this pointer points to
+        // Remove one level of pointer from the type
+        char* base_type = get_llvm_pointer_base_type(complete_type);
+
+        char* result = generate_temp();
+
+        // Load through the pointer - the pointer value is already the correct type
+        emit_llvm_ir("  %s = load %s, %s %s", result, base_type, complete_type, ptr_value);
+
+        free(ptr_value);
+        return result;
+    }
+
     // Handle postfix increment/decrement (i++, i--)
     if ((strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0) && node->is_postfix) {
         ASTNode* operand = node->left;
         if (!operand || operand->type != NODE_IDENTIFIER || !operand->value) return NULL;
 
         char* varname = operand->value;
-        char* llvm_type = get_llvm_type_from_semantic(operand);
-
-        // Load current value (return value)
-        char* old_val = generate_temp();
         SymbolEntry* symbol = find_symbol(varname);
-        if (symbol && symbol->is_static) {
-            emit_llvm_ir("  %s = load %s, %s* @%s", old_val, llvm_type, llvm_type, varname);
-        } else {
-            emit_llvm_ir("  %s = load %s, %s* %%%s", old_val, llvm_type, llvm_type, varname);
-        }
+        if (!symbol) return NULL;
 
-        // Calculate new value
-        char* new_val = generate_temp();
-        if (strcmp(node->op, "++") == 0) {
-            if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
-                emit_llvm_ir("  %s = fadd %s %s, 1.0", new_val, llvm_type, old_val);
+        char* llvm_type = get_complete_llvm_type(operand);
+
+        // Check if this is a pointer type
+        if (symbol->is_pointer) {
+            // POINTER ARITHMETIC: p++ or p--
+
+            // Load current pointer value (return value)
+            char* old_ptr = generate_temp();
+            if (symbol->is_static) {
+                emit_llvm_ir("  %s = load %s, %s* @%s", old_ptr, llvm_type, llvm_type, varname);
             } else {
-                emit_llvm_ir("  %s = add nsw %s %s, 1", new_val, llvm_type, old_val);
+                emit_llvm_ir("  %s = load %s, %s* %%%s", old_ptr, llvm_type, llvm_type, varname);
             }
-        } else {
-            if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
-                emit_llvm_ir("  %s = fsub %s %s, 1.0", new_val, llvm_type, old_val);
+
+            // Calculate new pointer value using getelementptr
+            char* new_ptr = generate_temp();
+            if (strcmp(node->op, "++") == 0) {
+                // p = p + 1 (increment pointer)
+                emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, i32 1",
+                            new_ptr, get_llvm_pointer_base_type(llvm_type), llvm_type, old_ptr);
             } else {
-                emit_llvm_ir("  %s = sub nsw %s %s, 1", new_val, llvm_type, old_val);
+                // p = p - 1 (decrement pointer)
+                emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, i32 -1",
+                            new_ptr, get_llvm_pointer_base_type(llvm_type), llvm_type, old_ptr);
             }
-        }
 
-        // Store new value back
-        if (symbol && symbol->is_static) {
-            emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
-        } else {
-            emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
-        }
+            // Store new pointer value back
+            if (symbol->is_static) {
+                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_ptr, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_ptr, llvm_type, varname);
+            }
 
-        free(new_val);
-        return old_val; // Return the old value for postfix
+            free(new_ptr);
+            return old_ptr; // Return the old pointer value for postfix
+        }
+        else {
+            // REGULAR VARIABLE (non-pointer) - existing code
+            // Load current value (return value)
+            char* old_val = generate_temp();
+            if (symbol->is_static) {
+                emit_llvm_ir("  %s = load %s, %s* @%s", old_val, llvm_type, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  %s = load %s, %s* %%%s", old_val, llvm_type, llvm_type, varname);
+            }
+
+            // Calculate new value
+            char* new_val = generate_temp();
+            if (strcmp(node->op, "++") == 0) {
+                if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
+                    emit_llvm_ir("  %s = fadd %s %s, 1.0", new_val, llvm_type, old_val);
+                } else {
+                    emit_llvm_ir("  %s = add nsw %s %s, 1", new_val, llvm_type, old_val);
+                }
+            } else {
+                if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
+                    emit_llvm_ir("  %s = fsub %s %s, 1.0", new_val, llvm_type, old_val);
+                } else {
+                    emit_llvm_ir("  %s = sub nsw %s %s, 1", new_val, llvm_type, old_val);
+                }
+            }
+
+            // Store new value back
+            if (symbol->is_static) {
+                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
+            }
+
+            free(new_val);
+            return old_val; // Return the old value for postfix
+        }
     }
     // Handle prefix increment/decrement (++i, --i)
     else if (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0) {
@@ -5471,49 +6668,88 @@ case NODE_UNARY_OP: {
         if (!operand || operand->type != NODE_IDENTIFIER || !operand->value) return NULL;
 
         char* varname = operand->value;
-        char* llvm_type = get_llvm_type_from_semantic(operand);
-
-        // Load current value
-        char* current_val = generate_temp();
         SymbolEntry* symbol = find_symbol(varname);
-        if (symbol && symbol->is_static) {
-            emit_llvm_ir("  %s = load %s, %s* @%s", current_val, llvm_type, llvm_type, varname);
-        } else {
-            emit_llvm_ir("  %s = load %s, %s* %%%s", current_val, llvm_type, llvm_type, varname);
-        }
+        if (!symbol) return NULL;
 
-        // Calculate new value
-        char* new_val = generate_temp();
-        if (strcmp(node->op, "++") == 0) {
-            if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
-                emit_llvm_ir("  %s = fadd %s %s, 1.0", new_val, llvm_type, current_val);
+        char* llvm_type = get_complete_llvm_type(operand);
+
+        // Check if this is a pointer type
+        if (symbol->is_pointer) {
+            // POINTER ARITHMETIC: ++p or --p
+
+            // Load current pointer value
+            char* current_ptr = generate_temp();
+            if (symbol->is_static) {
+                emit_llvm_ir("  %s = load %s, %s* @%s", current_ptr, llvm_type, llvm_type, varname);
             } else {
-                emit_llvm_ir("  %s = add nsw %s %s, 1", new_val, llvm_type, current_val);
+                emit_llvm_ir("  %s = load %s, %s* %%%s", current_ptr, llvm_type, llvm_type, varname);
             }
-        } else {
-            if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
-                emit_llvm_ir("  %s = fsub %s %s, 1.0", new_val, llvm_type, current_val);
+
+            // Calculate new pointer value using getelementptr
+            char* new_ptr = generate_temp();
+            if (strcmp(node->op, "++") == 0) {
+                // p = p + 1 (increment pointer)
+                emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, i32 1",
+                            new_ptr, get_llvm_pointer_base_type(llvm_type), llvm_type, current_ptr);
             } else {
-                emit_llvm_ir("  %s = sub nsw %s %s, 1", new_val, llvm_type, current_val);
+                // p = p - 1 (decrement pointer)
+                emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, i32 -1",
+                            new_ptr, get_llvm_pointer_base_type(llvm_type), llvm_type, current_ptr);
             }
-        }
 
-        // Store new value back
-        if (symbol && symbol->is_static) {
-            emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
-        } else {
-            emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
-        }
+            // Store new pointer value back
+            if (symbol->is_static) {
+                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_ptr, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_ptr, llvm_type, varname);
+            }
 
-        free(current_val);
-        return new_val; // Return the new value for prefix
+            free(current_ptr);
+            return new_ptr; // Return the new pointer value for prefix
+        }
+        else {
+            // REGULAR VARIABLE (non-pointer) - existing code
+            // Load current value
+            char* current_val = generate_temp();
+            if (symbol->is_static) {
+                emit_llvm_ir("  %s = load %s, %s* @%s", current_val, llvm_type, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  %s = load %s, %s* %%%s", current_val, llvm_type, llvm_type, varname);
+            }
+
+            // Calculate new value
+            char* new_val = generate_temp();
+            if (strcmp(node->op, "++") == 0) {
+                if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
+                    emit_llvm_ir("  %s = fadd %s %s, 1.0", new_val, llvm_type, current_val);
+                } else {
+                    emit_llvm_ir("  %s = add nsw %s %s, 1", new_val, llvm_type, current_val);
+                }
+            } else {
+                if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
+                    emit_llvm_ir("  %s = fsub %s %s, 1.0", new_val, llvm_type, current_val);
+                } else {
+                    emit_llvm_ir("  %s = sub nsw %s %s, 1", new_val, llvm_type, current_val);
+                }
+            }
+
+            // Store new value back
+            if (symbol->is_static) {
+                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
+            } else {
+                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
+            }
+
+            free(current_val);
+            return new_val; // Return the new value for prefix
+        }
     }
     // Handle other unary operators
     else if (strcmp(node->op, "-") == 0) {
         char* operand_val = generate_llvm_ir_from_ast(node->left);
         if (!operand_val) return NULL;
 
-        char* llvm_type = get_llvm_type_from_semantic(node->left);
+        char* llvm_type = get_complete_llvm_type(node->left);
         char* result = generate_temp();
 
         if (strcmp(llvm_type, "float") == 0 || strcmp(llvm_type, "double") == 0) {
@@ -5529,7 +6765,7 @@ case NODE_UNARY_OP: {
         if (!operand_val) return NULL;
 
         char* result = generate_temp();
-        char* llvm_type = get_llvm_type_from_semantic(node->left);
+        char* llvm_type = get_complete_llvm_type(node->left);
 
         if (strcmp(llvm_type, "i1") == 0) {
             // Direct boolean negation
@@ -5838,8 +7074,8 @@ case NODE_BINARY_OP: {
     char* left_raw = NULL;
     char* right_raw = NULL;
 
-    char* left_type = get_llvm_type_from_semantic(node->left);
-    char* right_type = get_llvm_type_from_semantic(node->right);
+    char* left_type = get_complete_llvm_type(node->left);
+    char* right_type = get_complete_llvm_type(node->right);
 
     // Use the dominant type for the operation
     char* result_type = left_type;
@@ -5857,6 +7093,10 @@ case NODE_BINARY_OP: {
             emit_llvm_ir("  %s = load %s, %s* @%s", left_val, left_type, left_type, left_raw);
         }
         else{
+            if (node->left->is_parameter){
+            emit_llvm_ir("  %s = load %s, %s* %%%s.addr", left_val, left_type, left_type, left_raw);
+            }
+            else
             emit_llvm_ir("  %s = load %s, %s* %%%s", left_val, left_type, left_type, left_raw);
         }
     } else {
@@ -5871,6 +7111,10 @@ case NODE_BINARY_OP: {
             emit_llvm_ir("  %s = load %s, %s* @%s", right_val, right_type, right_type, right_raw);
         }
         else{
+            if(node->right->is_parameter){
+            emit_llvm_ir("  %s = load %s, %s* %%%s.addr", right_val, right_type, right_type, right_raw);
+            }
+            else
             emit_llvm_ir("  %s = load %s, %s* %%%s", right_val, right_type, right_type, right_raw);
         }
     } else {
@@ -6050,97 +7294,101 @@ case NODE_ASSIGNMENT: {
     // Handle array element assignment: arr[i] = value
     // Handle multi-dimensional array element assignment: arr[i][j] = value
     if (node->left && node->left->type == NODE_INDEX) {
-        ASTNode* index_chain = node->left;
-        ASTNode* value_node = node->right;
-
-        if (!value_node) return NULL;
-
-        // Use the same indexing logic as NODE_INDEX case
-        ASTNode* current_index = index_chain;
+        ASTNode* current = node->left;
         ASTNode* base_array = NULL;
         char* array_name = NULL;
-        int is_global = 0;
+        SymbolEntry* symbol = NULL;
 
-        // Find the base array and collect all indices
+        // Collect all indices in reverse order (from outermost to innermost)
         ASTNode* indices[10]; // max 10 dimensions
         int index_count = 0;
 
-        while (current_index && current_index->type == NODE_INDEX) {
-            indices[index_count++] = current_index;
+        // Traverse the index chain to find the base array and collect indices
+        while (current && current->type == NODE_INDEX) {
+            indices[index_count++] = current;
+            ASTNode* array_part = current->child;
 
-            if (current_index->child && current_index->child->type == NODE_IDENTIFIER) {
-                base_array = current_index->child;
-                array_name = base_array->value;
-                SymbolEntry* symbol = find_symbol(array_name);
-                is_global = symbol ? symbol->is_static : 0;
+            if (array_part && array_part->type == NODE_IDENTIFIER) {
+                base_array = array_part;
+                array_name = array_part->value;
+                symbol = find_symbol(array_name);
                 break;
             }
-            current_index = current_index->child;
+            current = array_part;
         }
 
-        if (!base_array || !array_name) return NULL;
+        if (!base_array || !array_name || !symbol) return NULL;
 
-        // Generate all index expressions
+        char* value_val = generate_llvm_ir_from_ast(node->right);
+        if (!value_val) return NULL;
+
+        // Generate all index expressions (from outermost to innermost)
         char* index_values[10];
         int actual_index_count = 0;
 
-        for (int i = index_count - 1; i >= 0; i--) {
+        for (int i = index_count-1; i >=0; i--) {
             ASTNode* index_node = indices[i]->child ? indices[i]->child->next : NULL;
             if (index_node) {
-                index_values[actual_index_count++] = generate_llvm_ir_from_ast(index_node);
+                // Use simplified value for literals to avoid redundant "add i32 0, constant"
+                if (index_node->type == NODE_LITERAL ) {
+                    index_values[i] = strdup(index_node->value);
+                } else {
+                    index_values[i] = get_index_value(index_node);
+                }
             }
         }
 
-        char* value_val = generate_llvm_ir_from_ast(value_node);
-        if (!value_val) return NULL;
-
-        // Build GEP instruction
-        char* current_ptr = NULL;
         char* array_type = get_complete_llvm_type(base_array);
-        char* element_type = get_llvm_type_from_semantic(base_array);
+        char* element_ptr = generate_temp();
 
-        if (is_global) {
-            // Global array access
+        // Build GEP instruction with all indices
+        if (symbol->is_static) {
+            // Global array
             char* load_temp = generate_temp();
             emit_llvm_ir("  %s = load %s, %s* @%s, align 4", load_temp, array_type, array_type, array_name);
-            current_ptr = load_temp;
+
+            // Build GEP with all indices
+            char gep_str[512] = "";
+            strcpy(gep_str, "i32 0");
+            for (int i = 0; i < actual_index_count; i++) {
+                char temp[64];
+                sprintf(temp, ", i32 %s", index_values[i]);
+                strcat(gep_str, temp);
+            }
+
+            emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, %s",
+                         element_ptr, array_type, array_type, load_temp, gep_str);
+            free(load_temp);
         } else {
-            // Local array - start with array pointer
-            current_ptr = generate_temp();
-            emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, i32 0",
-                        current_ptr, array_type, array_type, array_name);
+            // Local array - build GEP with all indices
+            char gep_str[512] = "";
+            strcpy(gep_str, "i32 0");
+            for (int i = 0; i < actual_index_count; i++) {
+                char temp[64];
+                sprintf(temp, ", i32 %s", index_values[i]);
+                strcat(gep_str, temp);
+            }
+
+            emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, %s",
+                         element_ptr, array_type, array_type, array_name, gep_str);
         }
 
-        // Process all indices
-        for (int i = 0; i < actual_index_count; i++) {
-            if (!index_values[i]) continue;
-
-            char* next_ptr = generate_temp();
-            emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %s, i32 0, i32 %s",
-                        next_ptr,
-                        i == actual_index_count - 1 ? element_type : array_type, // Last index gets element type
-                        i == actual_index_count - 1 ? element_type : array_type,
-                        current_ptr,
-                        index_values[i]);
-
-            if (current_ptr[0] == '%') free(current_ptr);
-            current_ptr = next_ptr;
-            free(index_values[i]);
-        }
-
-        // Store the value with proper type
+        // Store the value
         char* store_value = value_val;
         if (value_val[0] == '!') {
-            // Boolean value - zext to element type
+            // Boolean value
             store_value = generate_temp();
-            emit_llvm_ir("  %s = zext i1 %s to %s", store_value, value_val + 1, element_type);
+            emit_llvm_ir("  %s = zext i1 %s to i32", store_value, value_val + 1);
             free(value_val);
         }
 
-        emit_llvm_ir("  store %s %s, %s* %s, align 4", element_type, store_value, element_type, current_ptr);
+        emit_llvm_ir("  store i32 %s, i32* %s, align 4", store_value, element_ptr);
 
-        if (current_ptr[0] == '%') free(current_ptr);
         if (store_value != value_val) free(store_value);
+        free(element_ptr);
+        for (int i = 0; i < actual_index_count; i++) {
+            if (index_values[i]) free(index_values[i]);
+        }
         return NULL;
     }
 
@@ -6200,7 +7448,263 @@ case NODE_ASSIGNMENT: {
             return NULL;
         }
     }
+    // Handle pointer assignment: p = &a or p = q (where p and q are pointers)
+    if (node->left && node->left->type == NODE_IDENTIFIER) {
+        SymbolEntry* symbol = find_symbol(node->left->value);
+        if (symbol && symbol->is_pointer) {
+            // This is a pointer variable assignment
+            char* pointer_value = generate_llvm_ir_from_ast(node->right);
+            if (!pointer_value) return NULL;
 
+            char* pointer_type = get_complete_llvm_type(node->left);
+
+            if (symbol->is_static) {
+                // Global pointer
+                emit_llvm_ir("  store %s %s, %s* @%s", pointer_type, pointer_value, pointer_type, node->left->value);
+            } else {
+                // Local pointer
+                emit_llvm_ir("  store %s %s, %s* %%%s", pointer_type, pointer_value, pointer_type, node->left->value);
+            }
+
+            free(pointer_value);
+            return NULL;
+        }
+    }
+
+// Handle LOCAL STATIC variable assignment - CHECK THIS FIRST
+    if (node->left && node->left->type == NODE_IDENTIFIER && node->left->value) {
+        SymbolEntry* symbol = find_symbol(node->left->value);
+        if (symbol && symbol->is_static && strcmp(current_function, "") != 0) {
+            char mangled_name[128];
+            sprintf(mangled_name, "%s.%s", current_function, node->left->value);
+
+            char* var_type = get_complete_llvm_type(node->left);
+            char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
+
+            // Handle compound assignment operators for local static variables
+            if (node->op && strcmp(node->op, "=") != 0) {
+                /* Compound assignment: load var, apply op with RHS, store back */
+
+                /* Load current value with alignment */
+                char* cur = generate_temp();
+                emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, mangled_name);
+
+                /* Ensure RHS is correct type: if RHS is a marked i1, zext it to var_type */
+                char* rhs = NULL;
+                if (!right_value) {
+                    rhs = strdup("0");
+                } else if (right_value[0] == '!') {
+                    rhs = generate_temp();
+                    emit_llvm_ir("  %s = zext i1 %s to %s", rhs, right_value + 1, var_type);
+                    free(right_value);
+                } else {
+                    rhs = right_value;
+                }
+
+                /* Compute new value based on operator */
+                char* res = generate_temp();
+                if (strcmp(node->op, "+=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fadd %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = add nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "-=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fsub %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = sub nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "*=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fmul %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = mul nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "/=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fdiv %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = sdiv %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "%=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = frem %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = srem %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "&=") == 0) {
+                    emit_llvm_ir("  %s = and %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "|=") == 0) {
+                    emit_llvm_ir("  %s = or %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "^=") == 0) {
+                    emit_llvm_ir("  %s = xor %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "<<=") == 0) {
+                    emit_llvm_ir("  %s = shl %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, ">>=") == 0) {
+                    emit_llvm_ir("  %s = ashr %s %s, %s", res, var_type, cur, rhs);
+                } else {
+                    /* Unknown compound operator - fall back to simple store */
+                    char* store_value = rhs;
+                    if (rhs[0] == '!') {
+                        char* zext_tmp = generate_temp();
+                        emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, rhs + 1, var_type);
+                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, mangled_name);
+                        free(zext_tmp);
+                    } else {
+                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, rhs, var_type, mangled_name);
+                    }
+                    free(cur);
+                    if (rhs != right_value) free(rhs);
+                    return NULL;
+                }
+
+                /* Store back with alignment */
+                emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, mangled_name);
+
+                /* free temps */
+                free(cur);
+                free(res);
+                if (rhs != right_value) free(rhs);
+                return NULL;
+            }
+
+            // Handle simple assignment for local static variables
+            if (right_value) {
+                char* store_value = right_value;
+                if (right_value[0] == '!') {
+                    char* zext_tmp = generate_temp();
+                    emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
+                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, mangled_name);
+                    free(zext_tmp);
+                    free(right_value);
+                } else {
+                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, mangled_name);
+                    free(right_value);
+                }
+            } else {
+                /* no rhs -> store 0 */
+                emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, mangled_name);
+            }
+            return NULL;
+        }
+    }
+
+    // Handle GLOBAL STATIC variable assignment
+    if (node->left && node->left->type == NODE_IDENTIFIER && node->left->value) {
+        SymbolEntry* symbol = find_symbol(node->left->value);
+        if (symbol && symbol->is_static && strcmp(current_function, "") == 0) {
+            char* var_type = get_complete_llvm_type(node->left);
+            char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
+
+            // Handle compound assignment operators for global static variables
+            if (node->op && strcmp(node->op, "=") != 0) {
+                /* Compound assignment: load var, apply op with RHS, store back */
+
+                /* Load current value with alignment */
+                char* cur = generate_temp();
+                emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, node->left->value);
+
+                /* Ensure RHS is correct type: if RHS is a marked i1, zext it to var_type */
+                char* rhs = NULL;
+                if (!right_value) {
+                    rhs = strdup("0");
+                } else if (right_value[0] == '!') {
+                    rhs = generate_temp();
+                    emit_llvm_ir("  %s = zext i1 %s to %s", rhs, right_value + 1, var_type);
+                    free(right_value);
+                } else {
+                    rhs = right_value;
+                }
+
+                /* Compute new value based on operator */
+                char* res = generate_temp();
+                if (strcmp(node->op, "+=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fadd %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = add nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "-=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fsub %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = sub nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "*=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fmul %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = mul nsw %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "/=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = fdiv %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = sdiv %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "%=") == 0) {
+                    if (strcmp(var_type, "float") == 0 || strcmp(var_type, "double") == 0) {
+                        emit_llvm_ir("  %s = frem %s %s, %s", res, var_type, cur, rhs);
+                    } else {
+                        emit_llvm_ir("  %s = srem %s %s, %s", res, var_type, cur, rhs);
+                    }
+                } else if (strcmp(node->op, "&=") == 0) {
+                    emit_llvm_ir("  %s = and %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "|=") == 0) {
+                    emit_llvm_ir("  %s = or %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "^=") == 0) {
+                    emit_llvm_ir("  %s = xor %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, "<<=") == 0) {
+                    emit_llvm_ir("  %s = shl %s %s, %s", res, var_type, cur, rhs);
+                } else if (strcmp(node->op, ">>=") == 0) {
+                    emit_llvm_ir("  %s = ashr %s %s, %s", res, var_type, cur, rhs);
+                } else {
+                    /* Unknown compound operator - fall back to simple store */
+                    char* store_value = rhs;
+                    if (rhs[0] == '!') {
+                        char* zext_tmp = generate_temp();
+                        emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, rhs + 1, var_type);
+                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, node->left->value);
+                        free(zext_tmp);
+                    } else {
+                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, rhs, var_type, node->left->value);
+                    }
+                    free(cur);
+                    if (rhs != right_value) free(rhs);
+                    return NULL;
+                }
+
+                /* Store back with alignment */
+                emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, node->left->value);
+
+                /* free temps */
+                free(cur);
+                free(res);
+                if (rhs != right_value) free(rhs);
+                return NULL;
+            }
+
+            // Handle simple assignment for global static variables
+            if (right_value) {
+                char* store_value = right_value;
+                if (right_value[0] == '!') {
+                    char* zext_tmp = generate_temp();
+                    emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
+                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, node->left->value);
+                    free(zext_tmp);
+                    free(right_value);
+                } else {
+                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, node->left->value);
+                    free(right_value);
+                }
+            } else {
+                /* no rhs -> store 0 */
+                emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, node->left->value);
+            }
+            return NULL;
+        }
+    }
     // Handle regular variable assignment
     if (node->left && node->left->type == NODE_IDENTIFIER && node->left->value) {
         var_name = strdup(node->left->value);
@@ -6208,7 +7712,7 @@ case NODE_ASSIGNMENT: {
         // Check if this is a static variable
         SymbolEntry* symbol = find_symbol(var_name);
         int is_static = symbol ? symbol->is_static : 0;
-        char* var_type = get_llvm_type_from_semantic(node->left);
+        char* var_type = get_complete_llvm_type(node->left);
 
         /* Generate RHS */
         char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
@@ -6452,12 +7956,14 @@ case NODE_FUNCTION_DEF: {
 
     // Check if function has varargs
     int has_varargs = 0;
+    int named_param_count = 0;
     if (params_node && params_node->type == NODE_PARAM_LIST) {
         ASTNode* param = params_node->child;
         while (param) {
             if (param->type == NODE_ELLIPSIS) {
                 has_varargs = 1;
-                break;
+            } else {
+                named_param_count++;
             }
             param = param->next;
         }
@@ -6485,9 +7991,10 @@ case NODE_FUNCTION_DEF: {
             char* param_name = find_parameter_name(param);
             char* param_type = "i32"; // Default parameter type
 
-            // Get parameter type from the variable declaration
+            // Get parameter type from the variable declaration - FIXED FOR POINTERS
             if (param->datatype) {
-                param_type = get_llvm_type_from_semantic_for_type(param->datatype);
+                // Use get_complete_llvm_type to properly handle pointers
+                param_type = get_complete_llvm_type(param);
             }
 
             if (param_name) {
@@ -6557,15 +8064,24 @@ case NODE_FUNCTION_DEF: {
             char* param_name = find_parameter_name(param);
             char* param_type = "i32"; // Default
             if (param->datatype) {
-                param_type = get_llvm_type_from_semantic_for_type(param->datatype);
+                param_type = get_complete_llvm_type(param); // Use complete type for pointers
             }
 
             if (param_name) {
+                // POINTER FIX: Handle pointer parameters specifically
+                if (param->is_pointer) {
+                    // For pointer parameters, we need to allocate space for the pointer itself
+                    char* complete_param_type = get_complete_llvm_type(param);
+                    emit_llvm_ir("  %%%s.addr = alloca %s, align 4", param_name, complete_param_type);
+                    emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, align 4",
+                                complete_param_type, param_name, complete_param_type, param_name);
+                }
                 // Handle string parameters
-                if (strcmp(param->datatype, "string") == 0 || strcmp(param->datatype, "char*") == 0) {
+                else if (strcmp(param->datatype, "string") == 0 || strcmp(param->datatype, "char*") == 0) {
                     emit_llvm_ir("  %%%s.addr = alloca i8*, align 8", param_name);
                     emit_llvm_ir("  store i8* %%%s, i8** %%%s.addr, align 8", param_name, param_name);
                 } else {
+                    // Regular non-pointer parameters
                     emit_llvm_ir("  %%%s.addr = alloca %s, align 4", param_name, param_type);
                     emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, align 4", param_type, param_name, param_type, param_name);
                 }
@@ -6573,8 +8089,17 @@ case NODE_FUNCTION_DEF: {
                 // Use positional parameter name
                 char temp_name[16];
                 sprintf(temp_name, "arg%d", param_index);
-                emit_llvm_ir("  %%arg%d.addr = alloca %s, align 4", param_index, param_type);
-                emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, align 4", param_type, param_index, param_type, param_index);
+
+                // POINTER FIX: Handle pointer parameters for positional arguments too
+                if (param->is_pointer) {
+                    char* complete_param_type = get_complete_llvm_type(param);
+                    emit_llvm_ir("  %%arg%d.addr = alloca %s, align 4", param_index, complete_param_type);
+                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, align 4",
+                                complete_param_type, param_index, complete_param_type, param_index);
+                } else {
+                    emit_llvm_ir("  %%arg%d.addr = alloca %s, align 4", param_index, param_type);
+                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, align 4", param_type, param_index, param_type, param_index);
+                }
             }
             param_index++;
             param = param->next;
@@ -6583,7 +8108,19 @@ case NODE_FUNCTION_DEF: {
 
     // For varargs functions, set up va_list infrastructure
     if (has_varargs) {
-        emit_llvm_ir("  ; varargs function - va_list setup would go here");
+        // Add va_list declarations to the function
+        //emit_llvm_ir("  ; varargs function setup");
+
+        // Store named parameter count for va_start
+        char named_count_str[16];
+        sprintf(named_count_str, "%d", named_param_count);
+
+        // Emit comment about va_list usage
+        //emit_llvm_ir("  ; named parameter count: %s (for va_start)", named_count_str);
+       // emit_llvm_ir("  ; use va_list, va_start, va_arg, va_end for variable arguments");
+
+        // Note: Actual va_list variables will be created when NODE_VA_LIST_TYPE is encountered
+        // in the function body. The va_start will use the last named parameter.
     }
 
     // Process function body
@@ -6652,6 +8189,13 @@ case NODE_FUNCTION_DEF: {
 
     emit_llvm_ir("}");
     current_function[0] = '\0';
+
+    // Clean up any remaining va_list stack entries for this function
+    while (va_list_stack_top >= 0 &&
+           strcmp(va_list_stack[va_list_stack_top].function_name, func_name) == 0) {
+        pop_va_list();
+    }
+
     return NULL;
 }
 
@@ -6770,6 +8314,8 @@ case NODE_STMT_LIST: {
 case NODE_CALL: {
     ASTNode* func_node = node->child;
     ASTNode* args_node = func_node ? func_node->next : NULL;
+
+    // Lambda expression handling (keep existing)
     if (func_node->type == NODE_LAMBDA_EXPR) {
         // Inline lambda definition and call
         char* lambda_ptr = generate_llvm_ir_from_ast(func_node);
@@ -6821,6 +8367,7 @@ case NODE_CALL: {
         free(lambda_ptr);
         return result;
     }
+
     char* func_name = NULL;
     if (func_node->type == NODE_IDENTIFIER) {
         func_name = func_node->value;
@@ -6836,7 +8383,7 @@ case NODE_CALL: {
     FunctionInfo* func_info = find_function_info(func_name);
     char* return_type = func_info ? func_info->return_type : "i32";
 
-    // Handle string functions
+    // Handle string functions (keep existing)
     if (strcmp(func_name, "strlen") == 0) {
         char* result = generate_temp();
         if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
@@ -6866,7 +8413,160 @@ case NODE_CALL: {
         return result;
     }
 
-    // Handle arguments - build argument list properly with types
+    // ENHANCED: Comprehensive cin/cout handling
+    if (strcmp(func_name, "cout") == 0 || strcmp(func_name, "cin") == 0) {
+        char* result = generate_temp();
+
+        // Generate dynamic format string based on argument types
+        char* format_str = generate_format_string_for_arguments(args_node);
+        char* format_str_ptr = generate_temp();
+
+        // Create the format string constant name
+        char* format_var_name = generate_format_string_name();
+
+        int format_len = strlen(format_str) + 3; // +3 for "\\0A\\00" (newline + null terminator for cout)
+        if (strcmp(func_name, "cout") == 0) {
+            // Add to string constants collection instead of emitting immediately
+            char format_content[1024];
+            sprintf(format_content, "%s\\0A", format_str);
+            add_string_constant(format_var_name, format_content, format_len);
+        } else {
+            // For cin, no newline needed
+            format_len = strlen(format_str) + 1; // +1 for null terminator
+            add_string_constant(format_var_name, format_str, format_len);
+        }
+
+        // Use the collected string constant
+        emit_llvm_ir("  %s = getelementptr inbounds [%d x i8], [%d x i8]* @%s, i32 0, i32 0",
+                     format_str_ptr, format_len, format_len, format_var_name);
+
+        // Build comprehensive argument list
+        char final_args_str[2048] = "";
+        strcpy(final_args_str, "i8* ");
+        strcat(final_args_str, format_str_ptr);
+
+        if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
+            ASTNode* arg = args_node->child;
+            int arg_index = 0;
+
+            while (arg) {
+                strcat(final_args_str, ", ");
+
+                char* arg_type = get_complete_llvm_type(arg);
+                char* arg_val = generate_llvm_ir_from_ast(arg);
+
+                if (arg_val) {
+                    // Handle string/pointer types
+                    char* array_ptr_val = handle_array_pointer_for_io(arg);
+                    if (array_ptr_val&&(strcmp(arg->datatype,"string")!=0)) {
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str,array_ptr_val);
+                        if (array_ptr_val != arg_val) free(array_ptr_val);
+                        free(arg_val);
+                    }
+
+                    else if(strcmp(arg->datatype,"string")==0){
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str,arg_val);
+                    }
+
+                    // Handle array element access
+                    else if (arg->type == NODE_INDEX) {
+                        char* element_val = handle_array_element_for_io(arg,strdup(arg_val));
+                        if (element_val) {
+                            strcat(final_args_str, arg_type);
+                            strcat(final_args_str, " ");
+                            strcat(final_args_str, element_val);
+                            free(element_val);
+                            free(arg_val);
+                        } else {
+                            strcat(final_args_str, arg_type);
+                            strcat(final_args_str, " ");
+                            strcat(final_args_str, arg_val);
+                            free(arg_val);
+                        }
+                    }
+                    // Handle boolean types with special treatment
+                    else if (arg_val[0] == '!') {
+                        if (strcmp(func_name, "cout") == 0) {
+                            // For cout, convert bool to string representation
+                            char* bool_str_var = generate_temp();
+                            emit_llvm_ir("  %s = select i1 %s, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.true, i64 0, i64 0), i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.false, i64 0, i64 0)",
+                                        bool_str_var, arg_val + 1);
+                            strcat(final_args_str, "i8* ");
+                            strcat(final_args_str, bool_str_var);
+                            free(bool_str_var);
+                        } else {
+                            // For cin, convert to i32 for scanf
+                            char* zext_temp = generate_temp();
+                            emit_llvm_ir("  %s = zext i1 %s to i32", zext_temp, arg_val + 1);
+                            strcat(final_args_str, "i32 ");
+                            strcat(final_args_str, zext_temp);
+                            free(zext_temp);
+                        }
+                        free(arg_val);
+                    }
+                    // Handle character types (promote to i32)
+                    else if (strcmp(arg_type, "i8") == 0) {
+                        char* zext_temp = generate_temp();
+                        emit_llvm_ir("  %s = zext i8 %s to i32", zext_temp, arg_val);
+                        strcat(final_args_str, "i32 ");
+                        strcat(final_args_str, zext_temp);
+                        free(zext_temp);
+                        free(arg_val);
+                    }
+                    // Handle regular types with potential conversion
+                    else {
+                        // For cin, we might need different handling for pointers
+                        if (strcmp(func_name, "cin") == 0 && arg->is_pointer) {
+                            // For cin with pointers, we need the address
+                            char* loaded_val = generate_temp();
+                            if (arg->type == NODE_IDENTIFIER) {
+                                SymbolEntry* symbol = find_symbol(arg->value);
+                                if (symbol && symbol->is_static) {
+                                    emit_llvm_ir("  %s = bitcast %s* @%s to i8*", loaded_val, arg_type, arg->value);
+                                } else {
+                                    emit_llvm_ir("  %s = bitcast %s* %%%s to i8*", loaded_val, arg_type, arg->value);
+                                }
+                                strcat(final_args_str, "i8* ");
+                                strcat(final_args_str, loaded_val);
+                                free(loaded_val);
+                            } else {
+                                strcat(final_args_str, arg_type);
+                                strcat(final_args_str, " ");
+                                strcat(final_args_str, arg_val);
+                            }
+                        } else {
+                            strcat(final_args_str, arg_type);
+                            strcat(final_args_str, " ");
+                            strcat(final_args_str, arg_val);
+                        }
+                        free(arg_val);
+                    }
+                } else {
+                    // Default value for missing argument
+                    strcat(final_args_str, arg_type);
+                    strcat(final_args_str, " 0");
+                }
+
+                arg_index++;
+                arg = arg->next;
+            }
+        }
+
+        // Emit the call with proper function mapping
+        if (strcmp(func_name, "cout") == 0) {
+            emit_llvm_ir("  %s = call i32 (i8*, ...) @cout(%s)", result, final_args_str);
+        } else {
+            emit_llvm_ir("  %s = call i32 (i8*, ...) @cin(%s)", result, final_args_str);
+        }
+
+        free(format_str);
+        free(format_str_ptr);
+        return result;
+    }
+
+    // Handle arguments - build argument list properly with types (existing functionality)
     char args_str[512] = "";
     char typed_args_str[1024] = "";
     int arg_count = 0;
@@ -6882,7 +8582,7 @@ case NODE_CALL: {
             }
 
             char* arg_val = generate_llvm_ir_from_ast(arg);
-            char* arg_type = get_llvm_type_from_semantic(arg);
+            char* arg_type = get_complete_llvm_type(arg);
 
             if (arg_val) {
                 if (arg_val[0] == '!') {
@@ -6919,20 +8619,84 @@ case NODE_CALL: {
         }
     }
 
-    // Generate call instruction
+    // Generate call instruction for other functions
     if (strcmp(func_name, "printf") == 0 || strcmp(func_name, "scanf") == 0) {
         // For printf/scanf, use varargs with i8* first parameter
         char* result = generate_temp();
-        emit_llvm_ir("  %s = call i32 (i8*, ...) @%s(%s)", result, func_name, args_str);
+
+        // Build proper argument string with explicit types
+        char final_args_str[1024] = "";
+
+        // For printf/scanf, use the original typed_args_str (they should already have types)
+        strcpy(final_args_str, typed_args_str);
+
+        // For printf/scanf with no arguments, we need to provide at least an empty format string
+        if (final_args_str[0] == '\0') {
+            // Create an empty string constant for the format string
+            char* empty_str_ptr = generate_temp();
+            emit_llvm_ir("  %s = getelementptr inbounds ([1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0)", empty_str_ptr);
+            emit_llvm_ir("  %s = call i32 (i8*, ...) @%s(i8* %s)", result, func_name, empty_str_ptr);
+            free(empty_str_ptr);
+        } else {
+            emit_llvm_ir("  %s = call i32 (i8*, ...) @%s(%s)", result, func_name, final_args_str);
+        }
         return result;
-    } else if (is_varargs) {
-        // For user-defined varargs functions - use (...) without types
+    }
+    // In the NODE_CALL case, replace the varargs section with this:
+
+    else if (is_varargs) {
+        // For user-defined varargs functions - build proper argument list
         char* result = generate_temp();
 
-        if (args_str[0] != '\0') {
-            emit_llvm_ir("  %s = call %s (...) @%s(%s)", result, return_type, func_name, args_str);
+        // Build argument list with explicit types
+        char final_args_str[2048] = "";
+
+        if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
+            ASTNode* arg = args_node->child;
+            int first_arg = 1;
+            int arg_index = 0;
+
+            while (arg) {
+                if (!first_arg) strcat(final_args_str, ", ");
+
+                char* arg_type = get_complete_llvm_type(arg);
+                char* arg_val = generate_llvm_ir_from_ast(arg);
+
+                if (arg_val) {
+                    // Handle boolean arguments
+                    if (arg_val[0] == '!') {
+                        if (strcmp(arg_type, "i1") == 0) {
+                            strcat(final_args_str, "i1 ");
+                            strcat(final_args_str, arg_val + 1);
+                        } else {
+                            char* zext_temp = generate_temp();
+                            emit_llvm_ir("  %s = zext i1 %s to %s", zext_temp, arg_val + 1, arg_type);
+                            strcat(final_args_str, arg_type);
+                            strcat(final_args_str, " ");
+                            strcat(final_args_str, zext_temp);
+                            free(zext_temp);
+                        }
+                    } else {
+                        strcat(final_args_str, arg_type);
+                        strcat(final_args_str, " ");
+                        strcat(final_args_str, arg_val);
+                    }
+                    free(arg_val);
+                } else {
+                    strcat(final_args_str, arg_type);
+                    strcat(final_args_str, " 0");
+                }
+
+                first_arg = 0;
+                arg_index++;
+                arg = arg->next;
+            }
+        }
+
+        if (final_args_str[0] != '\0') {
+            emit_llvm_ir("  %s = call %s (i32, ...) @%s(%s)", result, return_type, func_name, final_args_str);
         } else {
-            emit_llvm_ir("  %s = call %s (...) @%s()", result, return_type, func_name);
+            emit_llvm_ir("  %s = call %s (i32, ...) @%s()", result, return_type, func_name);
         }
         return result;
     } else {
@@ -6948,7 +8712,603 @@ case NODE_CALL: {
     }
 }
 
-// ... [Rest of the cases remain similar but should also be updated to use proper types]
+case NODE_SWITCH_STMT: {
+    // Structure: expression -> case_blocks
+    ASTNode* expr_node = node->child;
+    ASTNode* case_blocks_node = expr_node ? expr_node->next : NULL;
+
+    if (!expr_node) return NULL;
+
+    // Generate the switch expression
+    char* switch_value = generate_llvm_ir_from_ast(expr_node);
+    if (!switch_value) return NULL;
+
+    char* end_switch = generate_label();
+    char* default_label = NULL;
+
+    // Process case blocks
+    if (case_blocks_node && case_blocks_node->type == NODE_CASE_BLOCKS) {
+        ASTNode* case_block = case_blocks_node->child;
+
+        while (case_block) {
+            if (case_block->type == NODE_CASE_STMT) {
+                // CASE statement
+                ASTNode* case_expr = case_block->child;
+                ASTNode* case_body = case_expr ? case_expr->next : NULL;
+
+                if (case_expr) {
+                    char* case_value = generate_llvm_ir_from_ast(case_expr);
+                    char* case_label = generate_label();
+
+                    // Compare switch value with case value
+                    char* cmp_temp = generate_temp();
+                    emit_llvm_ir("  %s = icmp eq i32 %s, %s", cmp_temp, switch_value, case_value);
+                    emit_llvm_ir("  br i1 %s, label %%%s, label %%next_case_%s",
+                                cmp_temp, case_label, case_label);
+
+                    // Case body
+                    emit_llvm_ir("%s:", case_label);
+                    if (case_body) {
+                        generate_llvm_ir_from_ast(case_body);
+                    }
+                    emit_llvm_ir("  br label %%%s", end_switch);
+
+                    emit_llvm_ir("next_case_%s:", case_label);
+
+                    free(case_value);
+                    free(case_label);
+                    free(cmp_temp);
+                }
+            } else if (case_block->type == NODE_DEFAULT_STMT) {
+                // DEFAULT statement
+                ASTNode* default_body = case_block->child;
+                default_label = generate_label();
+
+                emit_llvm_ir("  br label %%%s", default_label);
+                emit_llvm_ir("%s:", default_label);
+
+                if (default_body) {
+                    generate_llvm_ir_from_ast(default_body);
+                }
+                emit_llvm_ir("  br label %%%s", end_switch);
+            }
+            case_block = case_block->next;
+        }
+    }
+
+    // If no default case, jump to end
+    if (!default_label) {
+        emit_llvm_ir("  br label %%%s", end_switch);
+    }
+
+    // End of switch
+    emit_llvm_ir("%s:", end_switch);
+
+    free(switch_value);
+    free(end_switch);
+    if (default_label) free(default_label);
+
+    return NULL;
+}
+
+case NODE_LAMBDA_EXPR: {
+    // Lambda expression: [capture](params) -> ret_type { body }
+    ASTNode* capture_node = node->child;
+    ASTNode* params_node = capture_node ? capture_node->next : NULL;
+    ASTNode* ret_type_node = params_node ? params_node->next : NULL;
+    ASTNode* body_node = ret_type_node ? ret_type_node->next : (params_node ? params_node->next : NULL);
+
+    // Generate a unique name for the lambda function
+    static int lambda_counter = 0;
+    char lambda_name[32];
+    sprintf(lambda_name, "lambda_%d", lambda_counter++);
+
+    // Determine return type
+    char* return_type = "i32"; // Default return type
+    if (ret_type_node && ret_type_node->type == NODE_LAMBDA_RET) {
+        ASTNode* actual_ret_type = ret_type_node->child;
+        if (actual_ret_type && actual_ret_type->type == NODE_TYPE && actual_ret_type->value) {
+            if (strcmp(actual_ret_type->value, "void") == 0) {
+                return_type = "void";
+            }
+        }
+    }
+
+    // Build capture parameters
+    char capture_params[512] = "";
+    int has_captures = 0;
+
+    if (capture_node && capture_node->type == NODE_LAMBDA_CAPTURE) {
+        ASTNode* capture_item = capture_node->child;
+        int first_capture = 1;
+
+        while (capture_item) {
+            if (!first_capture) strcat(capture_params, ", ");
+
+            if (capture_item->type == NODE_IDENTIFIER) {
+                // Capture by value
+                char capture_str[64];
+                sprintf(capture_str, "i32 %%%s_val", capture_item->value);
+                strcat(capture_params, capture_str);
+                has_captures = 1;
+            } else if (capture_item->type == NODE_TYPE && capture_item->value) {
+                if (strcmp(capture_item->value, "&") == 0) {
+                    // Capture by reference
+                    ASTNode* ref_target = capture_item->next;
+                    if (ref_target && ref_target->type == NODE_IDENTIFIER) {
+                        char capture_str[64];
+                        sprintf(capture_str, "i32* %%%s_ref", ref_target->value);
+                        strcat(capture_params, capture_str);
+                        has_captures = 1;
+                        capture_item = ref_target; // Skip the reference target
+                    }
+                }
+            }
+
+            first_capture = 0;
+            capture_item = capture_item->next;
+        }
+    }
+
+    // Build regular parameters
+    char regular_params[512] = "";
+    int has_regular_params = 0;
+
+    if (params_node && params_node->type == NODE_PARAM_LIST && params_node->child) {
+        ASTNode* param = params_node->child;
+        int first_param = 1;
+
+        while (param) {
+            if (!first_param) strcat(regular_params, ", ");
+
+            char* param_name = find_parameter_name(param);
+            if (param_name) {
+                char param_str[64];
+                sprintf(param_str, "i32 %%%s", param_name);
+                strcat(regular_params, param_str);
+            } else {
+                char param_str[16];
+                sprintf(param_str, "i32 %%p%d", has_regular_params);
+                strcat(regular_params, param_str);
+            }
+
+            has_regular_params = 1;
+            first_param = 0;
+            param = param->next;
+        }
+    }
+
+    // Combine all parameters
+    char full_signature[1024] = "";
+    if (has_captures) {
+        strcpy(full_signature, capture_params);
+        if (has_regular_params) {
+            strcat(full_signature, ", ");
+            strcat(full_signature, regular_params);
+        }
+    } else if (has_regular_params) {
+        strcpy(full_signature, regular_params);
+    }
+
+    // Emit lambda function definition
+    if (strcmp(return_type, "void") == 0) {
+        if (full_signature[0] != '\0') {
+            emit_llvm_ir("define internal void @%s(%s) {", lambda_name, full_signature);
+        } else {
+            emit_llvm_ir("define internal void @%s() {", lambda_name);
+        }
+    } else {
+        if (full_signature[0] != '\0') {
+            emit_llvm_ir("define internal %s @%s(%s) {", return_type, lambda_name, full_signature);
+        } else {
+            emit_llvm_ir("define internal %s @%s() {", return_type, lambda_name);
+        }
+    }
+
+    // Handle captures in function body
+    if (capture_node && capture_node->type == NODE_LAMBDA_CAPTURE) {
+        ASTNode* capture_item = capture_node->child;
+
+        while (capture_item) {
+            if (capture_item->type == NODE_IDENTIFIER) {
+                // Capture by value - create local copy
+                emit_llvm_ir("  %%%s = alloca i32", capture_item->value);
+                emit_llvm_ir("  store i32 %%%s_val, i32* %%%s",
+                            capture_item->value, capture_item->value);
+            } else if (capture_item->type == NODE_TYPE && capture_item->value) {
+                if (strcmp(capture_item->value, "&") == 0) {
+                    // Capture by reference - store the pointer
+                    ASTNode* ref_target = capture_item->next;
+                    if (ref_target && ref_target->type == NODE_IDENTIFIER) {
+                        emit_llvm_ir("  %%%s_ptr = alloca i32*", ref_target->value);
+                        emit_llvm_ir("  store i32* %%%s_ref, i32** %%%s_ptr",
+                                    ref_target->value, ref_target->value);
+                    }
+                    capture_item = ref_target;
+                }
+            }
+            capture_item = capture_item->next;
+        }
+    }
+
+    // Handle regular parameters
+    if (params_node && params_node->type == NODE_PARAM_LIST && params_node->child) {
+        ASTNode* param = params_node->child;
+        int param_index = 0;
+
+        while (param) {
+            char* param_name = find_parameter_name(param);
+            if (param_name) {
+                emit_llvm_ir("  %%%s.addr = alloca i32", param_name);
+                emit_llvm_ir("  store i32 %%%s, i32* %%%s.addr", param_name, param_name);
+            } else {
+                emit_llvm_ir("  %%arg%d.addr = alloca i32", param_index);
+                emit_llvm_ir("  store i32 %%p%d, i32* %%arg%d.addr", param_index, param_index);
+            }
+            param_index++;
+            param = param->next;
+        }
+    }
+
+    // Process lambda body
+    if (body_node) {
+        generate_llvm_ir_from_ast(body_node);
+    }
+
+    // Add default return if needed
+    if (strcmp(return_type, "void") != 0) {
+        int has_return = 0;
+        if (body_node) {
+            // Check if body ends with return statement
+            ASTNode* last_child = body_node;
+            while (last_child && last_child->next) {
+                last_child = last_child->next;
+            }
+            if (last_child && last_child->type == NODE_RETURN_STMT) {
+                has_return = 1;
+            }
+        }
+
+        if (!has_return) {
+            emit_llvm_ir("  ret i32 0");
+        }
+    } else {
+        emit_llvm_ir("  ret void");
+    }
+
+    emit_llvm_ir("}");
+
+    // Return function pointer as i8*
+    char* lambda_ptr = generate_temp();
+    if (strcmp(return_type, "void") == 0) {
+        if (full_signature[0] != '\0') {
+            emit_llvm_ir("  %s = bitcast void (%s)* @%s to i8*",
+                        lambda_ptr, full_signature, lambda_name);
+        } else {
+            emit_llvm_ir("  %s = bitcast void ()* @%s to i8*",
+                        lambda_ptr, lambda_name);
+        }
+    } else {
+        if (full_signature[0] != '\0') {
+            emit_llvm_ir("  %s = bitcast %s (%s)* @%s to i8*",
+                        lambda_ptr, return_type, full_signature, lambda_name);
+        } else {
+            emit_llvm_ir("  %s = bitcast %s ()* @%s to i8*",
+                        lambda_ptr, return_type, lambda_name);
+        }
+    }
+
+    return lambda_ptr;
+}
+case NODE_LAMBDA_CAPTURE: {
+    // Lambda capture: [&] or [=] or [var1, &var2]
+    if (node->value) {
+        if (strcmp(node->value, "&") == 0) {
+            // Capture all by reference
+            emit_llvm_ir("  ; capture all by reference");
+        } else if (strcmp(node->value, "=") == 0) {
+            // Capture all by value
+            emit_llvm_ir("  ; capture all by value");
+        }
+    }
+
+    // Process individual captures
+    ASTNode* capture_item = node->child;
+    while (capture_item) {
+        generate_llvm_ir_from_ast(capture_item);
+        capture_item = capture_item->next;
+    }
+    return NULL;
+}
+case NODE_LAMBDA_RET: {
+    // Lambda return type: -> type
+    ASTNode* ret_type = node->child;
+    if (ret_type) {
+        return generate_llvm_ir_from_ast(ret_type);
+    }
+    return NULL;
+}
+case NODE_TYPE: {
+    // Handle static types: static int, static float, etc.
+    if (node->value && strstr(node->value, "static") != NULL) {
+        // For static variables, we'll use internal linkage
+        // The actual static handling is done in NODE_VARIABLE_DECL
+        emit_llvm_ir("  ; static type: %s", node->value);
+    }
+    return NULL;
+}
+case NODE_ELLIPSIS: {
+    // ... in function parameter list - no code generation needed
+    // This is handled in NODE_FUNCTION_DEF during signature generation
+    return NULL;
+}
+
+case NODE_PROGRAM: {
+    // Set flag to collect global IR
+    collecting_global_ir = 1;
+
+    // Create mutable copies of the header strings
+    char llvm_header[] = "target datalayout = \"e-m:e-p:32:32-f64:64:64-f80:32-n8:16:32-S128\"\ntarget triple = \"mips-unknown-unknown\"";
+
+    // Store header in other_ir_lines - use a simpler approach without strtok
+    global_ir_lines[global_ir_count++].ir_line = strdup("; LLVM IR Generated by Compiler for MIPS target");
+    global_ir_lines[global_ir_count++].ir_line = strdup("target datalayout = \"e-m:e-p:32:32-f64:64:64-f80:32-n8:16:32-S128\"");
+    global_ir_lines[global_ir_count++].ir_line = strdup("target triple = \"mips-unknown-unknown\"");
+    global_ir_lines[global_ir_count++].ir_line = strdup("");
+
+    // Store standard format strings in global_ir_lines
+
+    const char* std_strings[] = {
+        "@.str.true = private unnamed_addr constant [5 x i8] c\"true\\00\"",
+        "@.str.false = private unnamed_addr constant [6 x i8] c\"false\\00\"",
+        "@.str.empty = private unnamed_addr constant [1 x i8] c\"\\00\"",
+        "@.str.d = private unnamed_addr constant [3 x i8] c\"%%d\\00\"",
+        "@.str.f = private unnamed_addr constant [3 x i8] c\"%%f\\00\"",
+        "@.str.lf = private unnamed_addr constant [4 x i8] c\"%%lf\\00\"",
+        "@.str.s = private unnamed_addr constant [3 x i8] c\"%%s\\00\"",
+        "@.str.c = private unnamed_addr constant [3 x i8] c\"%%c\\00\"",
+        "@.str.p = private unnamed_addr constant [3 x i8] c\"%%p\\00\"",
+        "@.str.x = private unnamed_addr constant [3 x i8] c\"%%x\\00\"",
+        "@.str.space = private unnamed_addr constant [2 x i8] c\" \\00\"",
+        "@.str.newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"",
+        NULL
+    };
+
+    for (int i = 0; std_strings[i] != NULL; i++) {
+        global_ir_lines[global_ir_count].ir_line = strdup(std_strings[i]);
+        global_ir_lines[global_ir_count].line_number = global_ir_count;
+        global_ir_count++;
+    }
+
+    // Store library declarations in other_ir_lines
+    collecting_global_ir = 0;
+    // Update the library declarations section to include va_* intrinsics:
+
+    const char* lib_decls[] = {
+        "declare i32 @cin(i8* nocapture, ...)",
+        "declare i32 @cout(i8* nocapture readonly, ...)",
+        "declare i32 @puts(i8* nocapture readonly)",
+        "declare i32 @putchar(i32)",
+        "declare i32 @getchar()",
+        "declare noalias i8* @malloc(i32)",
+        "declare void @free(i8* nocapture)",
+        "declare i32 @atoi(i8* nocapture)",
+        "declare void @llvm.memset.p0i8.i32(i8* nocapture writeonly, i8, i32, i1 immarg)",
+        "declare void @llvm.va_start(i8*)",
+        "declare void @llvm.va_end(i8*)",
+        "declare i8* @llvm.va_arg(i8*, i8*)",  // Generic version
+        "declare i32 @llvm.va_arg.i32(i8*, i32)",
+        "declare double @llvm.va_arg.f64(i8*, double)",
+        "declare i8* @llvm.va_arg.p0i8(i8*, i8*)",
+        "",
+        NULL
+    };
+
+    for (int i = 0; lib_decls[i] != NULL; i++) {
+        global_ir_lines[global_ir_count].ir_line = strdup(lib_decls[i]);
+        global_ir_lines[global_ir_count].line_number = global_ir_count;
+        global_ir_count++;
+    }
+
+    has_main_function = 0;
+
+    // FIRST PASS: Process the AST to collect global declarations and string constants
+    collecting_global_ir = 0;
+    ASTNode* child = node->child;
+    while (child) {
+        generate_llvm_ir_from_ast(child);
+        child = child->next;
+    }
+
+    //print_llvm_ir(node);
+
+    // Emit all global declarations at the top (this stores them in global_ir_lines)
+    emit_global_declarations();
+
+    // Emit all collected string constants (this stores them in global_ir_lines)
+    emit_string_constants();
+
+    collecting_global_ir = 0;
+
+    // If no main function, add a default one to function_ir_lines
+    if (!has_main_function) {
+        strcpy(current_function, "main");
+        // Make sure we're not in global collection mode when emitting function IR
+        int old_flag = collecting_global_ir;
+        collecting_global_ir = 0;
+
+        emit_llvm_ir("define i32 @main() {");
+        emit_llvm_ir("entry:");
+        emit_llvm_ir("  ret i32 0");
+        emit_llvm_ir("}");
+
+        collecting_global_ir = old_flag;
+        current_function[0] = '\0';
+    }
+
+    return NULL;
+}
+
+// Add these cases to the main switch statement in generate_llvm_ir_from_ast
+
+case NODE_VA_LIST_TYPE: {
+    // Handle va_list type declaration
+    char* va_list_name = generate_va_list_name();
+    emit_llvm_ir("  %s = alloca i8*, align 4", va_list_name);
+    return strdup(va_list_name);
+}
+
+case NODE_VA_LIST: {
+    // This handles va_list variable declaration
+    ASTNode* id_node = node->child;
+
+    if (id_node && id_node->type == NODE_IDENTIFIER) {
+        char* va_list_name = id_node->value;
+
+        // CORRECT: va_list is represented as i8* in LLVM IR
+        emit_llvm_ir("  %%%s = alloca i8*, align 4", va_list_name);
+
+        // Store in symbol table with proper type information
+        add_symbol_with_type(va_list_name, 0, "va_list", 1, 1, NULL, 0, 0); // is_pointer=1, pointer_depth=1
+
+        printf("DEBUG: va_list '%s' allocated\n", va_list_name);
+        return strdup(va_list_name);
+    }
+    return NULL;
+}
+
+case NODE_VA_START: {
+    ASTNode* va_list_node = node->child;
+    ASTNode* last_param_node = va_list_node ? va_list_node->next : NULL;
+
+    if (!va_list_node || va_list_node->type != NODE_IDENTIFIER) {
+        printf("Error: va_start requires va_list identifier\n");
+        return NULL;
+    }
+
+    char* va_list_name = va_list_node->value;
+
+    // FIXED: Use direct bitcast without temporary variable
+    emit_llvm_ir("  call void @llvm.va_start(i8* bitcast (i8** %%%s to i8*))", va_list_name);
+
+    printf("DEBUG: va_start called on '%s'\n", va_list_name);
+    return NULL;
+}
+
+case NODE_VA_ARG: {
+    ASTNode* va_list_node = node->child;
+    ASTNode* type_node = va_list_node ? va_list_node->next : NULL;
+
+    if (!va_list_node || va_list_node->type != NODE_IDENTIFIER || !type_node) {
+        printf("Error: va_arg requires va_list and type\n");
+        return NULL;
+    }
+
+    char* va_list_name = va_list_node->value;
+    char* result = generate_temp();
+
+    // Get the actual type from the type node
+    char* llvm_type = "i32"; // default to int
+    char* c_type = "int";    // for debugging
+    int is_float = 0;
+    int is_double = 0;
+    int is_char = 0;
+    int is_short = 0;
+    int is_long = 0;
+    int is_long_long = 0;
+
+    if (type_node->type == NODE_TYPE && type_node->value) {
+        c_type = type_node->value;
+
+        if (strcmp(type_node->value, "int") == 0 ||
+            strcmp(type_node->value, "unsigned int") == 0) {
+            llvm_type = "i32";
+        } else if (strcmp(type_node->value, "long") == 0 ||
+                   strcmp(type_node->value, "long int") == 0 ||
+                   strcmp(type_node->value, "unsigned long") == 0) {
+            // For MIPS target, long is typically 32-bit (same as int)
+            llvm_type = "i32";
+            is_long = 1;
+        } else if (strcmp(type_node->value, "long long") == 0 ||
+                   strcmp(type_node->value, "unsigned long long") == 0) {
+            // long long is always 64-bit
+            llvm_type = "i64";
+            is_long_long = 1;
+        } else if (strcmp(type_node->value, "float") == 0) {
+            // float is promoted to double in varargs
+            llvm_type = "double";
+            is_float = 1;
+        } else if (strcmp(type_node->value, "double") == 0) {
+            llvm_type = "double";
+            is_double = 1;
+        } else if (strcmp(type_node->value, "char") == 0 ||
+                   strcmp(type_node->value, "unsigned char") == 0) {
+            // char is promoted to int in varargs
+            llvm_type = "i32";
+            is_char = 1;
+        } else if (strcmp(type_node->value, "short") == 0 ||
+                   strcmp(type_node->value, "unsigned short") == 0) {
+            // short is promoted to int in varargs
+            llvm_type = "i32";
+            is_short = 1;
+        } else if (strstr(type_node->value, "*") != NULL) {
+            // Pointer types
+            llvm_type = "i8*";
+        }
+    }
+
+    // CORRECT: Use the standard LLVM va_arg instruction
+    if (is_float) {
+        // float is promoted to double in varargs, so we need to convert back
+        char* double_temp = generate_temp();
+        emit_llvm_ir("  %s = va_arg i8** %%%s, double", double_temp, va_list_name);
+        emit_llvm_ir("  %s = fptrunc double %s to float", result, double_temp);
+    } else if (is_double) {
+        emit_llvm_ir("  %s = va_arg i8** %%%s, double", result, va_list_name);
+    } else if (is_char) {
+        // chars are promoted to int in varargs
+        char* int_temp = generate_temp();
+        emit_llvm_ir("  %s = va_arg i8** %%%s, i32", int_temp, va_list_name);
+        emit_llvm_ir("  %s = trunc i32 %s to i8", result, int_temp);
+    } else if (is_short) {
+        // shorts are promoted to int in varargs
+        char* int_temp = generate_temp();
+        emit_llvm_ir("  %s = va_arg i8** %%%s, i32", int_temp, va_list_name);
+        emit_llvm_ir("  %s = trunc i32 %s to i16", result, int_temp);
+    } else if (is_long_long) {
+        // long long is 64-bit
+        emit_llvm_ir("  %s = va_arg i8** %%%s, i64", result, va_list_name);
+    } else if (strcmp(llvm_type, "i8*") == 0) {
+        emit_llvm_ir("  %s = va_arg i8** %%%s, i8*", result, va_list_name);
+    } else {
+        // Integer types (i32 for int, long, etc.)
+        emit_llvm_ir("  %s = va_arg i8** %%%s, %s", result, va_list_name, llvm_type);
+    }
+
+    printf("DEBUG: va_arg returned C type '%s' (LLVM type '%s') as temp '%s'\n",
+           c_type, llvm_type, result);
+    return result;
+}
+
+case NODE_VA_END: {
+    ASTNode* va_list_node = node->child;
+
+    if (!va_list_node || va_list_node->type != NODE_IDENTIFIER) {
+        printf("Error: va_end requires va_list identifier\n");
+        return NULL;
+    }
+
+    char* va_list_name = va_list_node->value;
+
+    // FIXED: Use direct bitcast without temporary variable
+    emit_llvm_ir("  call void @llvm.va_end(i8* bitcast (i8** %%%s to i8*))", va_list_name);
+
+    printf("DEBUG: va_end called on '%s'\n", va_list_name);
+    return NULL;
+}
+
+
+
 
         default: {
             // Generic fallback: process children
@@ -6964,17 +9324,28 @@ case NODE_CALL: {
 
 void print_llvm_ir(ASTNode* ast_root) {
     printf("\n=== LLVM Intermediate Representation ===\n");
-    temp_counter = 0;
-    label_counter = 0;
-    current_function[0] = '\0';
 
-    generate_llvm_ir_from_ast(ast_root);
+    // 1. Emit global declarations and string constants first
+    for (int i = 0; i < global_ir_count; i++) {
+        printf("%s\n", global_ir_lines[i].ir_line);
+    }
+
+    // 2. Emit other IR (function declarations, typedefs, etc.)
+    for (int i = 0; i < other_ir_count; i++) {
+        printf("%s\n", other_ir_lines[i].ir_line);
+    }
+
+    // 3. Emit function definitions
+    for (int i = 0; i < function_ir_count; i++) {
+        printf("%s\n", function_ir_lines[i].ir_line);
+    }
 }
 
 void free_llvm_ir() {
     temp_counter = 0;
     label_counter = 0;
     current_function[0] = '\0';
+    free_stored_ir();
 }
 
 void generate_global_static_declaration(ASTNode* node) {
@@ -7095,7 +9466,7 @@ void allocate_parameters(ASTNode* params_node) {
 
             if (param_name_node && param_name_node->value) {
                 char* param_name = param_name_node->value;
-                char* param_type = get_llvm_type_from_semantic(param);
+                char* param_type = get_complete_llvm_type(param);
                 emit_llvm_ir("  %%%s = alloca %s", param_name, param_type);
                 emit_llvm_ir("  store %s %%%d, %s* %%%s", param_type, param_index, param_type, param_name);
             }
@@ -7150,8 +9521,6 @@ int ends_with_unconditional_branch(ASTNode* node) {
     double fnum;
     struct ASTNode* ast;
 }
-
-
 /* ---------------- Tokens from lexer ---------------- */
 %token IF ELSE SWITCH CASE DEFAULT
 %token FOR WHILE DO
@@ -7291,7 +9660,7 @@ struct_member
 
 /* ---------------- Declarations ---------------- */
 multi_ptr
-    :{$$= create_ast_node(NODE_MULTI_PTR, line_val, "empty");}
+    :{$$= create_ast_node(NODE_EMPTY, line_val, "empty");}
     |multi_ptr MUL {
         ASTNode *ptr_node = create_ast_node(NODE_MULTI_PTR, line_val, "*");
         if ($1->type != NODE_EMPTY) {
@@ -7330,10 +9699,15 @@ declaration
         $$ = decl;
     }
     | TOK_VA_LIST IDENTIFIER SEMI {
-        ASTNode *decl = create_ast_node(NODE_VA_LIST, line_val, NULL);
-        ast_add_child(decl, create_ast_node(NODE_IDENTIFIER, line_val, $2));
-        $$ = decl;
-    }
+            //ASTNode *va_list_decl = create_ast_node(NODE_VA_LIST, line_val, NULL);
+            ASTNode *va_list_type = create_ast_node(NODE_VA_LIST, line_val, "va_list");
+            ASTNode *identifier = create_ast_node(NODE_IDENTIFIER, line_val, $2);
+
+           // ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
+            //ast_add_child(decl, va_list_type);
+            ast_add_child(va_list_type, identifier);
+            $$ = va_list_type;
+        }
     | AUTO declarator ASSIGN expression SEMI {
         ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
         ASTNode *auto_type = create_ast_node(NODE_TYPE, line_val, "auto");
@@ -7434,6 +9808,7 @@ type
     | VOID      { $$ = create_ast_node(NODE_TYPE, line_val, "void"); }
     | LONG      { $$ = create_ast_node(NODE_TYPE, line_val, "long");}
     | LONG LONG { $$ = create_ast_node(NODE_TYPE, line_val, "long long");}
+    | LONG DOUBLE { $$ = create_ast_node(NODE_TYPE, line_val, "long double");}
     | LONG INT  { $$ = create_ast_node(NODE_TYPE, line_val, "long int");}
     | LONG  FLOAT { $$ = create_ast_node(NODE_TYPE, line_val, "long float");}
     | CONST CHAR { $$ = create_ast_node(NODE_TYPE, line_val, "const char");}
@@ -7465,7 +9840,6 @@ type
     | UNSIGNED  { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned"); }
     | AUTO      { $$ = create_ast_node(NODE_TYPE, line_val, "auto"); }
     | STRING    { $$ = create_ast_node(NODE_TYPE, line_val, "string"); }
-    | TOK_VA_LIST   { $$ = create_ast_node(NODE_TYPE, line_val, "va_list"); }
     | IDENTIFIER { $$ = create_ast_node(NODE_TYPE, line_val, $1); }
     ;
 /* ---------------- Functions ---------------- */
@@ -7685,23 +10059,23 @@ statement
     | GOTO IDENTIFIER SEMI {
         $$ = create_ast_node(NODE_IDENTIFIER, line_val, $2);
       }
-    | TOK_VA_START LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMI {
-        ASTNode *va_start = create_ast_node(NODE_CALL, line_val, "va_start");
-        ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $3));
-        ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $5));
-        $$ = va_start;
-      }
-    | TOK_VA_ARG LPAREN IDENTIFIER COMMA type RPAREN SEMI {
-        ASTNode *va_arg = create_ast_node(NODE_CALL, line_val, "va_arg");
-        ast_add_child(va_arg, create_ast_node(NODE_IDENTIFIER, line_val, $3));
-        ast_add_child(va_arg, $5);
-        $$ = va_arg;
-      }
-    | TOK_VA_END LPAREN IDENTIFIER RPAREN SEMI {
-        ASTNode *va_end = create_ast_node(NODE_CALL, line_val, "va_end");
-        ast_add_child(va_end, create_ast_node(NODE_IDENTIFIER, line_val, $3));
-        $$ = va_end;
-      }
+     | TOK_VA_START LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMI {
+         ASTNode *va_start = create_ast_node(NODE_VA_START, line_val, NULL);
+         ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+         ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $5));  // last_param
+         $$ = va_start;
+     }
+     | TOK_VA_ARG LPAREN IDENTIFIER COMMA type RPAREN SEMI {
+         ASTNode *va_arg = create_ast_node(NODE_VA_ARG, line_val, NULL);
+         ast_add_child(va_arg, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+         ast_add_child(va_arg, $5);  // type
+         $$ = va_arg;
+     }
+     | TOK_VA_END LPAREN IDENTIFIER RPAREN SEMI {
+         ASTNode *va_end = create_ast_node(NODE_VA_END, line_val, NULL);
+         ast_add_child(va_end, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+         $$ = va_end;
+     }
     | SEMI { $$ = create_ast_node(NODE_EMPTY, line_val, "empty_stmt"); }
     | error SEMI { yyerrok; $$ = create_ast_node(NODE_EMPTY, line_val, "error_recovery"); }
     ;
@@ -7962,6 +10336,12 @@ primary_expr
     | literal { $$ = $1; }
     | LPAREN expression RPAREN { $$ = $2; }
     | lambda_expr { $$ = $1; }
+    | TOK_VA_ARG LPAREN IDENTIFIER COMMA type RPAREN {
+        ASTNode *va_arg = create_ast_node(NODE_VA_ARG, line_val, NULL);
+        ast_add_child(va_arg, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+        ast_add_child(va_arg, $5);  // type
+        $$ = va_arg;
+    }
     | STD_CIN { $$ = create_ast_node(NODE_IDENTIFIER, line_val, "cin"); }
     | STD_COUT { $$ = create_ast_node(NODE_IDENTIFIER, line_val, "cout"); }
     | STD_ENDL { $$ = create_ast_node(NODE_IDENTIFIER, line_val, "endl"); }
@@ -8120,11 +10500,11 @@ args_opt
     ;
 
 args_list
-    : expression {
+    : assignment_expr {
         $$ = create_ast_node(NODE_ARG_LIST, line_val, NULL);
         ast_add_child($$, $1);
       }
-    | args_list COMMA expression {
+    | args_list COMMA assignment_expr {
         ast_add_child($1, $3);
         $$ = $1;
       }
@@ -8151,8 +10531,7 @@ int main(int argc, char **argv) {
     int result = yyparse();
 
     if (result == 0) {
-
-         /* ========== SEMANTIC ANALYSIS ===================*/
+        /* ========== SEMANTIC ANALYSIS ===================*/
         printf("\n=== Semantic Analysis ===\n");
         semantic_info* global_scope = NULL;
         check_semantics(ast_root, &global_scope);
@@ -8160,13 +10539,27 @@ int main(int argc, char **argv) {
         printf("\n=== Abstract Syntax Tree ===\n");
         print_ast(ast_root, 0);
 
-
-
-        /* ========== ADD THESE LINES FOR IR GENERATION ========== */
+        /* ========== IR GENERATION ========== */
         printf("\nGenerating Intermediate Representation...\n");
+
+        // Reset all counters and storage
+        temp_counter = 0;
+        label_counter = 0;
+        current_function[0] = '\0';
+        global_ir_count = 0;
+        function_ir_count = 0;
+        other_ir_count = 0;
+        string_const_count = 0;
+        global_decl_count = 0;
+
+
+        // Generate IR (this will store it in the appropriate arrays)
         generate_llvm_ir_from_ast(ast_root);
-        //print_llvm_ir(ast_root);
-        /* ========== END OF IR GENERATION ADDITION ========== */
+
+
+
+        // Print all stored IR in correct order
+        print_llvm_ir(ast_root);
 
         printf("\nParsing completed successfully!\n");
     } else {
@@ -8177,7 +10570,6 @@ int main(int argc, char **argv) {
         free_ast(ast_root);
     }
 
-    /* ========== ADD THIS LINE TO FREE IR MEMORY ========== */
     free_llvm_ir();
 
     if (yyin != stdin) {
