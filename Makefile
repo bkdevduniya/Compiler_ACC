@@ -4,7 +4,7 @@ LEX = flex
 YACC = bison
 TARGET = compiler
 
-SOURCES = lex.yy.c parser.tab.c 
+SOURCES = lex.yy.c parser.tab.c
 OBJECTS = $(SOURCES:.c=.o)
 
 all: $(TARGET)
@@ -36,3 +36,5 @@ test: $(TARGET)
 	./run.sh
 
 .PHONY: all clean test
+
+
