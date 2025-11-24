@@ -67,6 +67,7 @@ typedef enum {
     NODE_FOR_INIT,
     NODE_EXPR_OPT,
     NODE_INITIALIZER,
+    NODE_POSTFIX_EXPR,
     NODE_VA_LIST,
     NODE_VA_START,
     NODE_VA_ARG,
@@ -362,9 +363,9 @@ void set_type_modifiers(ASTNode* node, char* type_name) {
     // Set size based on type
     if (strcmp(type_name, "int") == 0 || strcmp(type_name, "unsigned int") == 0) {
         node->size = 4;
-    } else if (strcmp(type_name, "float") == 0) {
+    } else if (strcmp(type_name, "float") == 0 ||strcmp(type_name, "static float") == 0 ) {
         node->size = 4;
-    } else if (strcmp(type_name, "double") == 0) {
+    } else if (strcmp(type_name, "double") == 0 || strcmp(type_name, "static double") == 0) {
         node->size = 8;
     } else if (strcmp(type_name, "char") == 0 || strcmp(type_name, "unsigned char") == 0) {
         node->size = 1;
@@ -376,7 +377,16 @@ void set_type_modifiers(ASTNode* node, char* type_name) {
         node->size = 8;
     } else if (strcmp(type_name, "bool") == 0) {
         node->size = 1;
-    } else if (strstr(type_name, "struct") != NULL) {
+    } 
+    else if (strcmp(type_name, "long int") == 0) {
+    node->size = 8;
+   }
+   else if (strcmp(type_name, "string") == 0) {
+    node->size = 8;
+    node->is_pointer = true;
+    node->pointer_depth = 1;
+   }
+    else if (strstr(type_name, "struct") != NULL) {
         // Struct size will be calculated during struct processing
         node->size = 0; // To be calculated
     } else if (strstr(type_name, "class") != NULL) {
@@ -404,12 +414,12 @@ void set_type_modifiers_semantic(semantic_info* info, char* type_name) {
     info->is_constinit = (strstr(type_name, "constinit") != NULL);
     info->is_explicit = (strstr(type_name, "explicit") != NULL);
 
-    // Set size based on type
+     // Set size based on type
     if (strcmp(type_name, "int") == 0 || strcmp(type_name, "unsigned int") == 0) {
         info->size = 4;
-    } else if (strcmp(type_name, "float") == 0) {
+    } else if (strcmp(type_name, "float") == 0 ||strcmp(type_name, "static float") == 0 ) {
         info->size = 4;
-    } else if (strcmp(type_name, "double") == 0) {
+    } else if (strcmp(type_name, "double") == 0 || strcmp(type_name, "static double") == 0) {
         info->size = 8;
     } else if (strcmp(type_name, "char") == 0 || strcmp(type_name, "unsigned char") == 0) {
         info->size = 1;
@@ -421,7 +431,16 @@ void set_type_modifiers_semantic(semantic_info* info, char* type_name) {
         info->size = 8;
     } else if (strcmp(type_name, "bool") == 0) {
         info->size = 1;
-    } else if (strstr(type_name, "struct") != NULL) {
+    } 
+    else if (strcmp(type_name, "long int") == 0) {
+     info->size = 8;
+   }
+   else if (strcmp(type_name, "string") == 0) {
+    info->size = 8;
+    info->ispointer = true;
+    info->pointerdepth = 1;
+   }
+    else if (strstr(type_name, "struct") != NULL) {
         // Struct size will be calculated during struct processing
         info->size = 0; // To be calculated
     } else if (strstr(type_name, "class") != NULL) {
@@ -1825,221 +1844,224 @@ case NODE_RETURN_STMT: {
         }
 
 case NODE_VARIABLE_DECL: {
-    ASTNode* type_node = node->child;
-    ASTNode* declarator_node = type_node ? type_node->next : NULL;
-    ASTNode* assignment_node = NULL;
+            ASTNode* type_node = node->child;
+            ASTNode* declarator_node = type_node ? type_node->next : NULL;
+            ASTNode* assignment_node = NULL;
 
-    // Handle assignment case
-    if (declarator_node && declarator_node->type == NODE_ASSIGNMENT) {
-        assignment_node = declarator_node;
-        declarator_node = declarator_node->left;
-    }
-
-    if (type_node && declarator_node) {
-        char* identifier = get_identifier_from_declarator(declarator_node);
-        if (identifier) {
-            printf("got tthe identifier '%s' \n",identifier);
-            // Check for redeclaration in current scope
-            semantic_info* existing = find_in_scope(current_scope, identifier);
-            if (existing) {
-                printf("Semantic Error at line %d: Redeclaration of '%s'\n", node->line_number, identifier);
-                free(identifier);
-                return;
+            // Handle assignment case
+            if (declarator_node && declarator_node->type == NODE_ASSIGNMENT) {
+                assignment_node = declarator_node;
+                declarator_node = declarator_node->left;
             }
 
-            bool is_pointer = false;
-            int pointer_depth = 0;
-            bool is_array = false;
-            bool is_ref = false;
-            int* array_sizes = NULL;
-            int array_dimensions = 0;
-            bool is_function=false;
-            int param_count=0;
-
-            // Extract array dimension and size information from declarator
-            get_type_info_from_declarator(declarator_node, &is_pointer, &pointer_depth, &is_array, &is_ref, &array_sizes, &array_dimensions);
-
-            // Process initializer expression if present (BEFORE setting AST fields)
-            ASTNode* init_expr = NULL;
-            if (assignment_node) {
-                init_expr = assignment_node->right;
-                check_semantics(init_expr, parent_scope);
-            }
-
-            // Handle auto type inference
-            bool is_auto_type = (type_node->value && strcmp(type_node->value, "auto") == 0);
-
-            if (is_auto_type && init_expr) {
-                // AUTO TYPE: Infer type from initializer expression
-
-
-                  // SPECIAL CASE: If initializer is a lambda, treat as function
-              if (init_expr->type == NODE_LAMBDA_EXPR) {
-
-
-                 // Set type to function pointer with lambda's signature
-                 if (type_node->value) free(type_node->value);
-                  type_node->value = strdup(init_expr->datatype);
-
-                   // Mark as function
-                   is_function = true;
-                   is_pointer = true;
-                   pointer_depth = 1;
-                   param_count = init_expr->param_count;
-
-
-                       } else {
-        // Regular auto type inference for non-lambda expressions
-                   if (type_node->value) free(type_node->value);
-                    type_node->value = init_expr->datatype ? strdup(init_expr->datatype) : NULL;
-                     }
-
-                // Free existing type and set to inferred type
-                if (type_node->value) free(type_node->value);
-                type_node->value = init_expr->datatype ? strdup(init_expr->datatype) : NULL;
-
-                // For arrays with init lists, infer array properties
-                if (init_expr->type == NODE_INIT_LIST && init_expr->is_array) {
-                    is_array = true;
-                    array_dimensions = init_expr->array_dimensions;
-                    if (init_expr->array_sizes && array_dimensions > 0) {
-                        array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                        memcpy(array_sizes, init_expr->array_sizes, array_dimensions * sizeof(int));
+            if (type_node && declarator_node) {
+                char* identifier = get_identifier_from_declarator(declarator_node);
+                if (identifier) {
+                    printf("got the identifier '%s' \n", identifier);
+                    // Check for redeclaration in current scope
+                    semantic_info* existing = find_in_scope(current_scope, identifier);
+                    if (existing) {
+                        printf("Semantic Error at line %d: Redeclaration of '%s'\n", node->line_number, identifier);
+                        free(identifier);
+                        return;
                     }
-                }
-            } else if (init_expr) {
-                // REGULAR TYPE: Check type compatibility
 
+                    bool is_pointer = false;
+                    int pointer_depth = 0;
+                    bool is_array = false;
+                    bool is_ref = false;
+                    int* array_sizes = NULL;
+                    int array_dimensions = 0;
+                    bool is_function = false;
+                    int param_count = 0;
 
-                // Handle array decay to pointer compatibility
-                bool types_compatible = false;
-                if (is_array && init_expr->is_pointer && (array_dimensions == init_expr->pointer_depth)&&
-                    is_type_compatible(type_node->value, init_expr->datatype)) {
-                    // Array can decay to pointer - check if base types are compatible
-                    types_compatible = true;
-                }
-                else if (is_pointer && init_expr->is_pointer && (pointer_depth == init_expr->pointer_depth)&&
-                    is_type_compatible(type_node->value, init_expr->datatype)) {
-                    // Array can decay to pointer - check if base types are compatible
-                    types_compatible = true;
+                    // Extract array dimension and size information from declarator
+                    get_type_info_from_declarator(declarator_node, &is_pointer, &pointer_depth, &is_array, &is_ref, &array_sizes, &array_dimensions);
 
-                }
-                else if(is_pointer && init_expr->is_array&& (pointer_depth == init_expr->array_dimensions)&&
-                is_type_compatible(type_node->value, init_expr->datatype)){
-                   types_compatible=true;
-                }
-                else {
-                    // Regular type compatibility check
-                    types_compatible = is_type_compatible(type_node->value, init_expr->datatype);
-                }
+                    // Process initializer expression if present (BEFORE setting AST fields)
+                    ASTNode* init_expr = NULL;
+                    if (assignment_node) {
+                        init_expr = assignment_node->right;
+                        check_semantics(init_expr, parent_scope);
+                    }
 
-                if (!types_compatible) {
-                    printf("Semantic Error at line %d: Type mismatch for '%s'. Declaration type '%s' is incompatible with initializer type '%s'\n",
-                           node->line_number, identifier, type_node->value, init_expr->datatype);
-                }
+                    // NEW: Handle static type modifiers from composite types
+                    bool is_static_type = false;
+                    bool is_const_type = false;
+                    bool is_unsigned_type = false;
+                    
+                    // Check for composite type modifiers in type_node
+                    if (type_node->value) {
+                        is_static_type = (strstr(type_node->value, "static") != NULL);
+                        is_const_type = (strstr(type_node->value, "const") != NULL);
+                        is_unsigned_type = (strstr(type_node->value, "unsigned") != NULL);
+                    }
 
-                // Handle array initialization with init list - COMPREHENSIVE VALIDATION
-                if (is_array && init_expr->type == NODE_INIT_LIST) {
-                    // Check if array dimensions match
-                    if (array_dimensions != init_expr->init_list_dimentions) {
-                        printf("Semantic Error at line %d: Array dimension mismatch for '%s'. Declaration has %d dimensions, initializer has %d dimensions\n",
-                               node->line_number, identifier, array_dimensions, init_expr->init_list_dimentions);
-                    } else {
-                        // COMPREHENSIVE DIMENSION VALIDATION
-                        bool validation_passed = validate_init_list_dimensions(init_expr, array_sizes, array_dimensions, 0, identifier, node->line_number);
+                    // Handle auto type inference
+                    bool is_auto_type = (type_node->value && strcmp(type_node->value, "auto") == 0);
 
-                        if (!validation_passed) {
-                            printf("Semantic Error at line %d: Initializer list structure does not match array declaration for '%s'\n",
-                                   node->line_number, identifier);
+                    if (is_auto_type && init_expr) {
+                        // AUTO TYPE: Infer type from initializer expression
+
+                        // SPECIAL CASE: If initializer is a lambda, treat as function
+                        if (init_expr->type == NODE_LAMBDA_EXPR) {
+                            // Set type to function pointer with lambda's signature
+                            if (type_node->value) free(type_node->value);
+                            type_node->value = strdup(init_expr->datatype);
+
+                            // Mark as function
+                            is_function = true;
+                            is_pointer = true;
+                            pointer_depth = 1;
+                            param_count = init_expr->param_count;
+                        } else {
+                            // Regular auto type inference for non-lambda expressions
+                            if (type_node->value) free(type_node->value);
+                            type_node->value = init_expr->datatype ? strdup(init_expr->datatype) : NULL;
+                        }
+
+                        // For arrays with init lists, infer array properties
+                        if (init_expr->type == NODE_INIT_LIST && init_expr->is_array) {
+                            is_array = true;
+                            array_dimensions = init_expr->array_dimensions;
+                            if (init_expr->array_sizes && array_dimensions > 0) {
+                                array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                                memcpy(array_sizes, init_expr->array_sizes, array_dimensions * sizeof(int));
+                            }
+                        }
+                    } else if (init_expr) {
+                        // REGULAR TYPE: Check type compatibility
+
+                        // Handle array decay to pointer compatibility
+                        bool types_compatible = false;
+                        if (is_array && init_expr->is_pointer && (array_dimensions == init_expr->pointer_depth) &&
+                            is_type_compatible(type_node->value, init_expr->datatype)) {
+                            // Array can decay to pointer - check if base types are compatible
+                            types_compatible = true;
+                        }
+                        else if (is_pointer && init_expr->is_pointer && (pointer_depth == init_expr->pointer_depth) &&
+                            is_type_compatible(type_node->value, init_expr->datatype)) {
+                            types_compatible = true;
+                        }
+                        else if (is_pointer && init_expr->is_array && (pointer_depth == init_expr->array_dimensions) &&
+                            is_type_compatible(type_node->value, init_expr->datatype)) {
+                            types_compatible = true;
+                        }
+                        else {
+                            // Regular type compatibility check
+                            types_compatible = is_type_compatible(type_node->value, init_expr->datatype);
+                        }
+
+                        if (!types_compatible) {
+                            printf("Semantic Error at line %d: Type mismatch for '%s'. Declaration type '%s' is incompatible with initializer type '%s'\n",
+                                   node->line_number, identifier, type_node->value, init_expr->datatype);
+                        }
+
+                        // Handle array initialization with init list - COMPREHENSIVE VALIDATION
+                        if (is_array && init_expr->type == NODE_INIT_LIST) {
+                            // Check if array dimensions match
+                            if (array_dimensions != init_expr->init_list_dimentions) {
+                                printf("Semantic Error at line %d: Array dimension mismatch for '%s'. Declaration has %d dimensions, initializer has %d dimensions\n",
+                                       node->line_number, identifier, array_dimensions, init_expr->init_list_dimentions);
+                            } else {
+                                // COMPREHENSIVE DIMENSION VALIDATION
+                                bool validation_passed = validate_init_list_dimensions(init_expr, array_sizes, array_dimensions, 0, identifier, node->line_number);
+
+                                if (!validation_passed) {
+                                    printf("Semantic Error at line %d: Initializer list structure does not match array declaration for '%s'\n",
+                                           node->line_number, identifier);
+                                }
+                            }
+                        }
+                        
+                        if (init_expr->type != NODE_INIT_LIST) {
+                            if (is_array && array_dimensions > 0 && (!init_expr->is_array || init_expr->array_dimensions == 0) && (!init_expr->is_pointer || init_expr->pointer_depth == 0)) {
+                                printf("Semantic Error: invalid assignment to pointer '%s'\n", identifier);
+                            }
+                            else if (is_pointer && pointer_depth > 0 && (!init_expr->is_array || init_expr->array_dimensions == 0) && (!init_expr->is_pointer || init_expr->pointer_depth == 0)) {
+                                printf("Semantic Error: invalid assignment to pointer '%s'\n", identifier);
+                            }
+                            else if (init_expr->is_array && init_expr->array_dimensions > 0 && (!is_array || array_dimensions == 0) && (!is_pointer || pointer_depth == 0)) {
+                                printf("Semantic Error: invalid assignment of pointer '%s'\n", identifier);
+                            }
+                            else if (init_expr->is_pointer && init_expr->pointer_depth > 0 && (!is_array || array_dimensions == 0) && (!is_pointer || pointer_depth == 0)) {
+                                printf("Semantic Error: invalid assignment of pointer '%s'\n", identifier);
+                            }
                         }
                     }
-                }
-              if(init_expr->type!=NODE_INIT_LIST){
-                if(is_array && array_dimensions>0 && (!init_expr->is_array||init_expr->array_dimensions==0) && (!init_expr->is_pointer||init_expr->pointer_depth==0)){
-                    printf("Semantic Error : invalid assignment to pointer '%s' \n",identifier);
-                }
 
-                else if(is_pointer && pointer_depth>0 && (!init_expr->is_array||init_expr->array_dimensions==0) && (!init_expr->is_pointer||init_expr->pointer_depth==0)){
-                    printf("Semantic Error : invalid assignment to pointer '%s' \n",identifier);
-                }
+                    // NOW SET ALL AST FIELDS AFTER ANALYSIS
 
-                else if(init_expr->is_array && init_expr->array_dimensions>0 && (!is_array||array_dimensions==0) && (!is_pointer||pointer_depth==0)){
-                    printf("Semantic Error : invalid assignment of pointer '%s' \n",identifier);
-                }
+                    // Set fields in main variable declaration node
+                    if (node->datatype) free(node->datatype);
+                    node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                    node->is_pointer = is_pointer;
+                    node->pointer_depth = pointer_depth;
+                    node->is_array = is_array;
+                    node->is_reference = is_ref;
+                    node->array_dimensions = array_dimensions;
+                    if (array_sizes) {
+                        node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                        memcpy(node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                    }
+                    
+                    // NEW: Set static/const/unsigned modifiers from composite types
+                    node->is_static = is_static_type;
+                    node->is_const = is_const_type;
+                    node->is_unsigned = is_unsigned_type;
+                    
+                    set_type_modifiers(node, type_node->value);
 
-                 else if(init_expr->is_pointer && init_expr->pointer_depth>0 && (!is_array||array_dimensions==0) && (!is_pointer||pointer_depth==0)){
-                    printf("Semantic Error : invalid assignment of pointer '%s' \n",identifier);
-                }
-              }
-            }
+                    // Set fields in type node
+                    if (type_node->datatype) free(type_node->datatype);
+                    type_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                    type_node->is_pointer = is_pointer;
+                    type_node->pointer_depth = pointer_depth;
+                    type_node->is_array = is_array;
+                    type_node->is_reference = is_ref;
+                    type_node->array_dimensions = array_dimensions;
+                    if (array_sizes) {
+                        type_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                        memcpy(type_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                    }
+                    set_type_modifiers(type_node, type_node->value);
 
-            // NOW SET ALL AST FIELDS AFTER ANALYSIS
+                    // Set fields in declarator node
+                    if (declarator_node->datatype) free(declarator_node->datatype);
+                    declarator_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                    declarator_node->is_pointer = is_pointer;
+                    declarator_node->pointer_depth = pointer_depth;
+                    declarator_node->is_array = is_array;
+                    declarator_node->is_reference = is_ref;
+                    declarator_node->array_dimensions = array_dimensions;
+                    if (array_sizes) {
+                        declarator_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                        memcpy(declarator_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                    }
+                    set_type_modifiers(declarator_node, type_node->value);
 
-            // Set fields in main variable declaration node
-            if (node->datatype) free(node->datatype);
-            node->datatype = type_node->value ? strdup(type_node->value) : NULL;
-            node->is_pointer = is_pointer;
-            node->pointer_depth = pointer_depth;
-            node->is_array = is_array;
-            node->is_reference = is_ref;
-            node->array_dimensions = array_dimensions;
-            if (array_sizes) {
-                node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                memcpy(node->array_sizes, array_sizes, array_dimensions * sizeof(int));
-            }
-            set_type_modifiers(node, type_node->value);
+                    ASTNode* identifier_node = declarator_node;
+                    while (identifier_node) {
+                        if (identifier_node->type == NODE_IDENTIFIER) break;
+                        identifier_node = identifier_node->child;
+                        if (identifier_node && identifier_node->type != NODE_IDENTIFIER && array_sizes && array_dimensions > 1) {
+                            if (identifier_node->datatype) free(identifier_node->datatype);
+                            identifier_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                            identifier_node->is_pointer = is_pointer;
+                            identifier_node->pointer_depth = pointer_depth;
+                            identifier_node->is_array = is_array;
+                            identifier_node->is_reference = is_ref;
+                            identifier_node->array_dimensions = array_dimensions;
+                            if (array_sizes) {
+                                identifier_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                                memcpy(identifier_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                            }
+                            set_type_modifiers(identifier_node, type_node->value);
+                        }
+                    }
 
-            // Set fields in type node
-            if (type_node->datatype) free(type_node->datatype);
-            type_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
-            type_node->is_pointer = is_pointer;
-            type_node->pointer_depth = pointer_depth;
-            type_node->is_array = is_array;
-            type_node->is_reference = is_ref;
-            type_node->array_dimensions = array_dimensions;
-            if (array_sizes) {
-                type_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                memcpy(type_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
-            }
-            set_type_modifiers(type_node, type_node->value);
-
-            // Set fields in declarator node
-            if (declarator_node->datatype) free(declarator_node->datatype);
-            declarator_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
-            declarator_node->is_pointer = is_pointer;
-            declarator_node->pointer_depth = pointer_depth;
-            declarator_node->is_array = is_array;
-            declarator_node->is_reference = is_ref;
-            declarator_node->array_dimensions = array_dimensions;
-            if (array_sizes) {
-                declarator_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                memcpy(declarator_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
-            }
-            set_type_modifiers(declarator_node, type_node->value);
-
-           ASTNode* identifier_node=declarator_node;
-
-           while(identifier_node){
-           if (identifier_node->type==NODE_IDENTIFIER)break;
-           identifier_node=identifier_node->child;
-           if(identifier_node&&identifier_node->type!=NODE_IDENTIFIER&&array_sizes&&array_dimensions>1){
-             if (identifier_node->datatype) free(identifier_node->datatype);
-             identifier_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
-             identifier_node->is_pointer = is_pointer;
-             identifier_node->pointer_depth = pointer_depth;
-             identifier_node->is_array = is_array;
-             identifier_node->is_reference = is_ref;
-             identifier_node->array_dimensions = array_dimensions;
-             if (array_sizes) {
-                           identifier_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                           memcpy(identifier_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
-                       }
-            set_type_modifiers(identifier_node, type_node->value);
-            }
-           }
-
-           if(identifier_node&&identifier_node->type==NODE_IDENTIFIER){
-                       if (identifier_node->datatype) free(declarator_node->datatype);
+                    if (identifier_node && identifier_node->type == NODE_IDENTIFIER) {
+                        if (identifier_node->datatype) free(identifier_node->datatype);
                         identifier_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
                         identifier_node->is_pointer = is_pointer;
                         identifier_node->pointer_depth = pointer_depth;
@@ -2051,57 +2073,59 @@ case NODE_VARIABLE_DECL: {
                             memcpy(identifier_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
                         }
                         set_type_modifiers(identifier_node, type_node->value);
-           }
+                    }
 
-            // Set fields in assignment node if present
-            if (assignment_node) {
-                if (assignment_node->datatype) free(assignment_node->datatype);
-                assignment_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
-                assignment_node->is_pointer = is_pointer;
-                assignment_node->pointer_depth = pointer_depth;
-                assignment_node->is_array = is_array;
-                assignment_node->is_reference = is_ref;
-                assignment_node->array_dimensions = array_dimensions;
-                if (array_sizes) {
-                    assignment_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                    memcpy(assignment_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                    // Set fields in assignment node if present
+                    if (assignment_node) {
+                        if (assignment_node->datatype) free(assignment_node->datatype);
+                        assignment_node->datatype = type_node->value ? strdup(type_node->value) : NULL;
+                        assignment_node->is_pointer = is_pointer;
+                        assignment_node->pointer_depth = pointer_depth;
+                        assignment_node->is_array = is_array;
+                        assignment_node->is_reference = is_ref;
+                        assignment_node->array_dimensions = array_dimensions;
+                        if (array_sizes) {
+                            assignment_node->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                            memcpy(assignment_node->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                        }
+                        set_type_modifiers(assignment_node, type_node->value);
+                    }
+
+                    // Create variable info and add to current scope
+                    semantic_info* var_info = create_semantic_info(
+                        type_node->value, identifier, false, is_pointer, false, is_ref,
+                        pointer_depth, is_array, 0, false
+                    );
+
+                    // NEW: Set static/const/unsigned modifiers in semantic info
+                    var_info->is_static = is_static_type;
+                    var_info->is_const = is_const_type;
+                    var_info->is_unsigned = is_unsigned_type;
+
+                    // Set extended fields in semantic info for LLVM
+                    var_info->array_dimensions = array_dimensions;
+                    if (array_sizes) {
+                        var_info->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
+                        memcpy(var_info->array_sizes, array_sizes, array_dimensions * sizeof(int));
+                    }
+                    set_type_modifiers_semantic(var_info, type_node->value);
+
+                    // Add to scope
+                    if (!current_scope) {
+                        current_scope = var_info;
+                        *parent_scope = current_scope;
+                    } else {
+                        semantic_info* last = current_scope;
+                        while (last->next) last = last->next;
+                        last->next = var_info;
+                        var_info->prev = last;
+                    }
+                    scope_start_ptr = var_info;
+
+                    free(identifier);
                 }
-                set_type_modifiers(assignment_node, type_node->value);
             }
-
-            // Create variable info and add to current scope
-            semantic_info* var_info = create_semantic_info(
-                type_node->value, identifier, false, is_pointer, false, is_ref,
-                pointer_depth, is_array, 0, false
-            );
-
-            // Set extended fields in semantic info for LLVM
-            var_info->array_dimensions = array_dimensions;
-            if (array_sizes) {
-                var_info->array_sizes = (int*)malloc(array_dimensions * sizeof(int));
-                memcpy(var_info->array_sizes, array_sizes, array_dimensions * sizeof(int));
-            }
-            set_type_modifiers_semantic(var_info, type_node->value);
-
-            // Add to scope
-            if (!current_scope) {
-                current_scope = var_info;
-                *parent_scope = current_scope;
-            } else {
-                semantic_info* last = current_scope;
-                while (last->next) last = last->next;
-                last->next = var_info;
-                var_info->prev = last;
-            }
-            scope_start_ptr = var_info;
-
-
-
-
-            free(identifier);
-        }
-    }
-    break;
+            break;
 }
 
 case NODE_LAMBDA_EXPR: {
@@ -2565,108 +2589,489 @@ case NODE_CALL: {
 }
 
 case NODE_BINARY_OP: {
-            check_semantics(node->left, parent_scope);
-            check_semantics(node->right, parent_scope);
+    check_semantics(node->left, parent_scope);
+    check_semantics(node->right, parent_scope);
 
-            if (node->left && node->right && node->left->datatype && node->right->datatype) {
-                // Free existing datatype if it exists
-                if (node->datatype) free(node->datatype);
+    if (node->left && node->right && node->left->datatype && node->right->datatype) {
+        // Free existing datatype if it exists
+        if (node->datatype) free(node->datatype);
 
-                // Handle comma operator separately (special case)
-                if (node->op && strcmp(node->op, ",") == 0) {
+        // Handle comma operator separately (special case)
+        if (node->op && strcmp(node->op, ",") == 0) {
+            node->datatype = strdup(node->right->datatype);
+            copy_llvm_fields(node, node->right);
+            // NEW: Copy type modifiers for comma operator
+            node->is_const = node->right->is_const;
+            node->is_static = node->right->is_static;
+            node->is_unsigned = node->right->is_unsigned;
+            break; // Comma operator has different rules
+        }
+
+        // Check type compatibility based on operator
+        bool types_compatible = is_type_compatible(node->left->datatype, node->right->datatype);
+        printf("DEBUG: left type '%s', right type '%s' is compatible %d\n",
+               node->left->datatype, node->right->datatype, (types_compatible == true ? 1 : 0));
+        
+        // Get operator for easier comparison
+        char* op = node->op;
+
+        // NEW: Enhanced type modifier handling
+        bool left_is_unsigned = node->left->is_unsigned;
+        bool right_is_unsigned = node->right->is_unsigned;
+        bool left_is_const = node->left->is_const;
+        bool right_is_const = node->right->is_const;
+
+        // Arithmetic operators: +, -, *, /, %
+        if (op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+                   strcmp(op, "*") == 0 || strcmp(op, "/") == 0 || strcmp(op, "%") == 0)) {
+
+            // Check if types support arithmetic operations
+            if (!types_compatible) {
+                printf("Semantic Error at line %d: Arithmetic operation '%s' between incompatible types '%s' and '%s'\n",
+                       node->line_number, op, node->left->datatype, node->right->datatype);
+            }
+
+            // NEW: Enhanced pointer arithmetic with array decay support
+            bool left_is_ptr_like = (node->left->is_pointer && node->left->pointer_depth > 0) || 
+                                   (node->left->is_array && node->left->array_dimensions > 0);
+            bool right_is_ptr_like = (node->right->is_pointer && node->right->pointer_depth > 0) || 
+                                    (node->right->is_array && node->right->array_dimensions > 0);
+
+            // Handle pointer arithmetic cases
+            if (left_is_ptr_like || right_is_ptr_like) {
+                if (strcmp(op, "%") == 0) {
+                    printf("Semantic Error at line %d: Modulo operator '%%' not allowed with pointers/arrays\n",
+                           node->line_number);
+                }
+                if (strcmp(op, "*") == 0 || strcmp(op, "/") == 0) {
+                    printf("Semantic Error at line %d: Arithmetic operation '%s' not allowed between pointers/arrays\n",
+                           node->line_number, op);
+                }
+                
+                // Pointer addition/subtraction rules
+                if (strcmp(op, "+") == 0 || strcmp(op, "-") == 0) {
+                    // Only allow: pointer ± integer or integer ± pointer
+                    bool valid_ptr_arithmetic = false;
+                    
+                    if (left_is_ptr_like && !right_is_ptr_like) {
+                        // pointer + integer or pointer - integer
+                        if (strcmp(node->right->datatype, "int") == 0 || 
+                            strcmp(node->right->datatype, "long") == 0) {
+                            valid_ptr_arithmetic = true;
+                            // Result is pointer type
+                            node->datatype = strdup(node->left->datatype);
+                            copy_llvm_fields(node, node->left);
+                            printf("DEBUG: Pointer arithmetic: %s %s integer\n", 
+                                   node->left->datatype, op);
+                        }
+                    } else if (!left_is_ptr_like && right_is_ptr_like && strcmp(op, "+") == 0) {
+                        // integer + pointer
+                        if (strcmp(node->left->datatype, "int") == 0 || 
+                            strcmp(node->left->datatype, "long") == 0) {
+                            valid_ptr_arithmetic = true;
+                            // Result is pointer type
+                            node->datatype = strdup(node->right->datatype);
+                            copy_llvm_fields(node, node->right);
+                            printf("DEBUG: Pointer arithmetic: integer %s %s\n", 
+                                   op, node->right->datatype);
+                        }
+                    } else if (left_is_ptr_like && right_is_ptr_like && strcmp(op, "-") == 0) {
+                        // pointer - pointer (yields integer)
+                        if (node->left->pointer_depth == node->right->pointer_depth &&
+                            is_type_compatible(node->left->datatype, node->right->datatype)) {
+                            valid_ptr_arithmetic = true;
+                            // Result is integer (ptrdiff_t)
+                            node->datatype = strdup("long");
+                            node->is_pointer = false;
+                            node->pointer_depth = 0;
+                            node->is_array = false;
+                            node->array_dimensions = 0;
+                            node->size = 8;
+                            printf("DEBUG: Pointer subtraction yields integer\n");
+                        }
+                    }
+                    
+                    if (!valid_ptr_arithmetic) {
+                        printf("Semantic Error at line %d: Invalid pointer arithmetic with '%s'\n",
+                               node->line_number, op);
+                    } else {
+                        break; // Skip normal type promotion for pointer arithmetic
+                    }
+                }
+            }
+
+            // String concatenation check for +
+            if (strcmp(op, "+") == 0 &&
+                (strcmp(node->left->datatype, "string") == 0 || strcmp(node->right->datatype, "string") == 0)) {
+                // String concatenation is allowed
+                node->datatype = strdup("string");
+                node->is_pointer = true;
+                node->pointer_depth = 1;
+                node->size = 8; // Platform-dependent, typically pointer size
+                // NEW: Set type modifiers for string result
+                node->is_const = false;
+                node->is_static = false;
+                node->is_unsigned = false;
+                break;
+            }
+
+            // NEW: Enhanced type promotion considering unsigned types and modifiers
+            int prec1 = precedence(node->left->datatype);
+            int prec2 = precedence(node->right->datatype);
+
+            // Type promotion rules considering unsigned types
+            if (prec1 == prec2) {
+                // Same precedence - prefer unsigned type
+                if (left_is_unsigned && !right_is_unsigned) {
+                    node->datatype = strdup(node->left->datatype);
+                    copy_llvm_fields(node, node->left);
+                } else if (!left_is_unsigned && right_is_unsigned) {
                     node->datatype = strdup(node->right->datatype);
                     copy_llvm_fields(node, node->right);
-                    break; // Comma operator has different rules
+                } else if (prec1 >= prec2) {
+                    node->datatype = strdup(node->left->datatype);
+                    copy_llvm_fields(node, node->left);
+                } else {
+                    node->datatype = strdup(node->right->datatype);
+                    copy_llvm_fields(node, node->right);
                 }
+            } else if (prec1 >= prec2) {
+                node->datatype = strdup(node->left->datatype);
+                copy_llvm_fields(node, node->left);
+            } else {
+                node->datatype = strdup(node->right->datatype);
+                copy_llvm_fields(node, node->right);
+            }
+            
+            // NEW: Set unsigned flag if either operand is unsigned
+            node->is_unsigned = left_is_unsigned || right_is_unsigned;
+            // Const doesn't propagate to arithmetic results
+            node->is_const = false;
+            node->is_static = false;
+        }
 
-                // Check type compatibility based on operator
-                bool types_compatible = is_type_compatible(node->left->datatype, node->right->datatype);
-                printf("DEBUG : left type '%s' , right type '%s' is compatible %d \n",node->left->datatype,node->right->datatype,(types_compatible==true?1:0));
-                // Get operator for easier comparison
-                char* op = node->op;
+        // Comparison operators: ==, !=, <, >, <=, >=
+        else if (op && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 ||
+                        strcmp(op, "<") == 0 || strcmp(op, ">") == 0 ||
+                        strcmp(op, "<=") == 0 || strcmp(op, ">=") == 0)) {
 
-                // Arithmetic operators: +, -, *, /, %
-                if (op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
-                           strcmp(op, "*") == 0 || strcmp(op, "/") == 0 || strcmp(op, "%") == 0)) {
+            if (!types_compatible) {
+                printf("Semantic Error at line %d: Comparison '%s' between incompatible types '%s' and '%s'\n",
+                       node->line_number, op, node->left->datatype, node->right->datatype);
+            }
 
-                    // Check if types support arithmetic operations
-                    if (!types_compatible) {
-                        printf("Semantic Error at line %d: Arithmetic operation '%s' between incompatible types '%s' and '%s'\n",
-                               node->line_number, op, node->left->datatype, node->right->datatype);
+            // NEW: Enhanced pointer/array comparison rules
+            bool left_is_ptr_like = (node->left->is_pointer && node->left->pointer_depth > 0) || 
+                                   (node->left->is_array && node->left->array_dimensions > 0);
+            bool right_is_ptr_like = (node->right->is_pointer && node->right->pointer_depth > 0) || 
+                                    (node->right->is_array && node->right->array_dimensions > 0);
+
+            if (left_is_ptr_like && right_is_ptr_like) {
+                // Pointer/array comparison
+                if (node->left->pointer_depth != node->right->pointer_depth) {
+                    printf("Semantic Error at line %d: Cannot compare pointers/arrays of different depths (%d vs %d)\n",
+                           node->line_number, node->left->pointer_depth, node->right->pointer_depth);
+                }
+                // Check base type compatibility for pointers
+                if (!is_type_compatible(node->left->datatype, node->right->datatype)) {
+                    printf("Warning at line %d: Comparing pointers with incompatible base types '%s' and '%s'\n",
+                           node->line_number, node->left->datatype, node->right->datatype);
+                }
+            } else if (left_is_ptr_like != right_is_ptr_like) {
+                // Mixed pointer/non-pointer comparison
+                printf("Warning at line %d: Comparing pointer with non-pointer type\n",
+                       node->line_number);
+            }
+
+            // NEW: Struct comparison enhancement
+            if (node->left->struct_name || node->right->struct_name) {
+                if (node->left->struct_name && node->right->struct_name) {
+                    if (strcmp(node->left->struct_name, node->right->struct_name) != 0) {
+                        printf("Semantic Error at line %d: Cannot compare different struct types '%s' and '%s'\n",
+                               node->line_number, node->left->struct_name, node->right->struct_name);
                     }
+                } else if ((node->left->struct_name && !node->right->struct_name) ||
+                          (!node->left->struct_name && node->right->struct_name)) {
+                    printf("Semantic Error at line %d: Cannot compare struct with non-struct type\n",
+                           node->line_number);
+                }
+            }
 
-                    // Check for pointer arithmetic restrictions
-                    if (node->left->is_pointer || node->right->is_pointer) {
-                        if (strcmp(op, "%") == 0) {
-                            printf("Semantic Error at line %d: Modulo operator '%%' not allowed with pointers\n",
-                                   node->line_number);
-                        }
-                        if ((node->left->is_pointer && node->left->pointer_depth>0)|| (node->right->is_pointer && node->right->pointer_depth>0)) {
-                            printf("Semantic Error at line %d: Arithmetic on pointers not allowed with '%s'\n",
-                                   node->line_number, op);
-                        }
-                         if ((node->left->is_array && node->left->array_dimensions>0)|| (node->right->is_array && node->right->array_dimensions>0)) {
-                            printf("Semantic Error at line %d: Arithmetic on pointers not allowed with '%s'\n",
-                                   node->line_number, op);
-                        }
-                    }
+            // Result of comparison is always boolean
+            node->datatype = strdup("bool");
+            node->is_pointer = false;
+            node->pointer_depth = 0;
+            node->size = 1;
+            node->is_array = false;
+            node->array_dimensions = 0;
+            node->is_const = false;
+            node->is_static = false;
+            node->is_unsigned = false;
+            if (node->array_sizes) {
+                free(node->array_sizes);
+                node->array_sizes = NULL;
+            }
+        }
 
+        // Logical operators: &&, ||
+        else if (op && (strcmp(op, "&&") == 0 || strcmp(op, "||") == 0)) {
+            // Check if types can be used in logical context
+            if (strcmp(node->left->datatype, "bool") != 0) {
+                printf("Warning at line %d: Left operand of '%s' is not boolean (type: %s)\n",
+                       node->line_number, op, node->left->datatype);
+            }
+            if (strcmp(node->right->datatype, "bool") != 0) {
+                printf("Warning at line %d: Right operand of '%s' is not boolean (type: %s)\n",
+                       node->line_number, op, node->right->datatype);
+            }
 
+            // NEW: Check for null pointer in logical context
+            if ((node->left->is_pointer && node->left->pointer_depth > 0) ||
+                (node->right->is_pointer && node->right->pointer_depth > 0)) {
+                printf("Warning at line %d: Pointer used in logical context '%s' (checking for null)\n",
+                       node->line_number, op);
+            }
 
-                    // String concatenation check for +
-                    if (strcmp(op, "+") == 0 &&
-                        (strcmp(node->left->datatype, "string") == 0 || strcmp(node->right->datatype, "string") == 0)) {
-                        // String concatenation is allowed
-                        node->datatype = strdup("string");
-                        node->is_pointer = true;
-                        node->pointer_depth = 1;
-                        node->size = 8; // Platform-dependent, typically pointer size
-                        break;
-                    }
+            // Result is always boolean
+            node->datatype = strdup("bool");
+            node->is_pointer = false;
+            node->pointer_depth = 0;
+            node->size = 1;
+            node->is_array = false;
+            node->array_dimensions = 0;
+            node->is_const = false;
+            node->is_static = false;
+            node->is_unsigned = false;
+        }
 
-                    // Type promotion for arithmetic operations
-                    int prec1 = precedence(node->left->datatype);
-                    int prec2 = precedence(node->right->datatype);
+        // Bitwise operators: &, |, ^, <<, >>
+        else if (op && (strcmp(op, "&") == 0 || strcmp(op, "|") == 0 || strcmp(op, "^") == 0 ||
+                        strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0)) {
 
-                    if (prec1 >= prec2) {
+            if (!types_compatible) {
+                printf("Semantic Error at line %d: Bitwise operation '%s' between incompatible types '%s' and '%s'\n",
+                       node->line_number, op, node->left->datatype, node->right->datatype);
+            }
+
+            // Check for invalid types for bitwise operations
+            if (strcmp(node->left->datatype, "float") == 0 || strcmp(node->left->datatype, "double") == 0 ||
+                strcmp(node->right->datatype, "float") == 0 || strcmp(node->right->datatype, "double") == 0) {
+                printf("Semantic Error at line %d: Bitwise operation '%s' not allowed on floating-point types\n",
+                       node->line_number, op);
+            }
+
+            if (strcmp(node->left->datatype, "string") == 0 || strcmp(node->right->datatype, "string") == 0) {
+                printf("Semantic Error at line %d: Bitwise operation '%s' not allowed on string types\n",
+                       node->line_number, op);
+            }
+
+            // NEW: Enhanced pointer restrictions for bitwise operations
+            if ((node->left->is_pointer && node->left->pointer_depth > 0) || 
+                (node->right->is_pointer && node->right->pointer_depth > 0)) {
+                printf("Semantic Error at line %d: Bitwise operation '%s' not allowed with pointers\n",
+                       node->line_number, op);
+            }
+            
+            if ((node->left->is_array && node->left->array_dimensions > 0) || 
+                (node->right->is_array && node->right->array_dimensions > 0)) {
+                printf("Semantic Error at line %d: Bitwise operation '%s' not allowed with arrays\n",
+                       node->line_number, op);
+            }
+
+            // NEW: Shift operation specific checks
+            if ((strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0) && 
+                strcmp(node->right->datatype, "bool") == 0) {
+                printf("Warning at line %d: Shift count should be integer, not boolean\n",
+                       node->line_number);
+            }
+
+            // Type promotion for bitwise operations
+            int prec1 = precedence(node->left->datatype);
+            int prec2 = precedence(node->right->datatype);
+
+            if (prec1 >= prec2) {
+                node->datatype = strdup(node->left->datatype);
+                copy_llvm_fields(node, node->left);
+            } else {
+                node->datatype = strdup(node->right->datatype);
+                copy_llvm_fields(node, node->right);
+            }
+            
+            // NEW: Set unsigned flag for bitwise operations
+            node->is_unsigned = left_is_unsigned || right_is_unsigned;
+            node->is_const = false;
+            node->is_static = false;
+        }
+
+        // NEW: Assignment operators handling (for completeness)
+        else if (op && (strcmp(op, "=") == 0 || strcmp(op, "+=") == 0 || strcmp(op, "-=") == 0 ||
+                        strcmp(op, "*=") == 0 || strcmp(op, "/=") == 0 || strcmp(op, "%=") == 0 ||
+                        strcmp(op, "&=") == 0 || strcmp(op, "|=") == 0 || strcmp(op, "^=") == 0 ||
+                        strcmp(op, "<<=") == 0 || strcmp(op, ">>=") == 0)) {
+            // Assignment operators are handled in NODE_ASSIGNMENT case
+            // This is just fallback handling
+            if (types_compatible) {
+                node->datatype = strdup(node->left->datatype);
+                copy_llvm_fields(node, node->left);
+            } else {
+                printf("Semantic Error at line %d: Assignment '%s' between incompatible types\n",
+                       node->line_number, op);
+                node->datatype = strdup("unknown");
+            }
+        }
+
+        // Array/pointer specific checks
+        if ((node->left->is_array && node->left->array_dimensions > 0) || 
+            (node->right->is_array && node->right->array_dimensions > 0)) {
+            // Arrays decay to pointers in most expressions
+            if (op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+                       strcmp(op, "*") == 0 || strcmp(op, "/") == 0)) {
+                printf("Warning at line %d: Array used in arithmetic operation '%s' (decays to pointer)\n",
+                       node->line_number, op);
+            }
+        }
+
+        // Const correctness
+        if ((left_is_const || right_is_const) &&
+            op && (strcmp(op, "=") == 0)) {
+            printf("Semantic Error at line %d: Cannot assign to const operand\n",
+                   node->line_number);
+        }
+
+        // NEW: Enhanced struct type operations
+        if (node->left->struct_name || node->right->struct_name) {
+            // Most operations on structs are not allowed
+            if (op && !(strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 ||
+                        strcmp(op, "=") == 0)) {
+                printf("Semantic Error at line %d: Operation '%s' not allowed on struct types\n",
+                       node->line_number, op);
+            }
+
+            // Struct comparison requires same struct type
+            if ((strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) &&
+                node->left->struct_name && node->right->struct_name) {
+                if (strcmp(node->left->struct_name, node->right->struct_name) != 0) {
+                    printf("Semantic Error at line %d: Cannot compare different struct types '%s' and '%s'\n",
+                           node->line_number, node->left->struct_name, node->right->struct_name);
+                }
+            }
+        }
+
+        // Function type operations
+        if (node->left->is_function || node->right->is_function) {
+            printf("Semantic Error at line %d: Operation '%s' not allowed on function types\n",
+                   node->line_number, op);
+        }
+
+        // Default case for unhandled operators or compatible types
+        if (!node->datatype) {
+            if (types_compatible) {
+                int prec1 = precedence(node->left->datatype);
+                int prec2 = precedence(node->right->datatype);
+
+                // NEW: Enhanced type promotion with modifier consideration
+                if (prec1 == prec2) {
+                    if (left_is_unsigned && !right_is_unsigned) {
+                        node->datatype = strdup(node->left->datatype);
+                        copy_llvm_fields(node, node->left);
+                    } else if (!left_is_unsigned && right_is_unsigned) {
+                        node->datatype = strdup(node->right->datatype);
+                        copy_llvm_fields(node, node->right);
+                    } else if (prec1 >= prec2) {
                         node->datatype = strdup(node->left->datatype);
                         copy_llvm_fields(node, node->left);
                     } else {
                         node->datatype = strdup(node->right->datatype);
                         copy_llvm_fields(node, node->right);
                     }
+                } else if (prec1 >= prec2) {
+                    node->datatype = strdup(node->left->datatype);
+                    copy_llvm_fields(node, node->left);
+                } else {
+                    node->datatype = strdup(node->right->datatype);
+                    copy_llvm_fields(node, node->right);
                 }
+                
+                // NEW: Set type modifiers for default case
+                node->is_unsigned = left_is_unsigned || right_is_unsigned;
+                node->is_const = false; // Operations don't preserve const
+                node->is_static = false;
+            } else {
+                printf("Semantic Error at line %d: Operation '%s' between incompatible types '%s' and '%s'\n",
+                       node->line_number, op, node->left->datatype, node->right->datatype);
+                node->datatype = strdup("unknown");
+                node->is_pointer = false;
+                node->pointer_depth = 0;
+                node->is_array = false;
+                node->array_dimensions = 0;
+                node->is_const = false;
+                node->is_static = false;
+                node->is_unsigned = false;
+            }
+        }
+        
+        // NEW: Debug output for complex operations
+        if (op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 || 
+                   strcmp(op, "*") == 0 || strcmp(op, "/") == 0)) {
+            printf("DEBUG: Binary op '%s' - result: type=%s, unsigned=%d, pointer=%d\n",
+                   op, node->datatype, node->is_unsigned, node->is_pointer);
+        }
+    } else {
+        if (!node->left || !node->left->datatype) {
+            printf("Semantic Error at line %d: Left operand of binary operator has undefined type\n",
+                   node->line_number);
+        }
+        if (!node->right || !node->right->datatype) {
+            printf("Semantic Error at line %d: Right operand of binary operator has undefined type\n",
+                   node->line_number);
+        }
+    }
+    break;
+}
 
-                // Comparison operators: ==, !=, <, >, <=, >=
-                else if (op && (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 ||
-                                strcmp(op, "<") == 0 || strcmp(op, ">") == 0 ||
-                                strcmp(op, "<=") == 0 || strcmp(op, ">=") == 0)) {
+case NODE_UNARY_OP: {
+    check_semantics(node->left, parent_scope);
+    if (node->left && node->left->datatype) {
+        // Free existing datatype if it exists
+        if (node->datatype) free(node->datatype);
+        node->datatype = strdup(node->left->datatype);
+        copy_llvm_fields(node, node->left);
 
-                    if (!types_compatible) {
-                        printf("Semantic Error at line %d: Comparison '%s' between incompatible types '%s' and '%s'\n",
-                               node->line_number, op, node->left->datatype, node->right->datatype);
-                    }
+        // NEW: Enhanced type modifier propagation
+        node->is_const = node->left->is_const;
+        node->is_static = node->left->is_static;
+        node->is_unsigned = node->left->is_unsigned;
 
-                    // Pointer comparison rules
-                    if (node->left->is_pointer && node->right->is_pointer) {
-                        if (node->left->pointer_depth != node->right->pointer_depth) {
-                            printf("Semantic Error at line %d: Cannot compare pointers of different depths (%d vs %d)\n",
-                                   node->line_number, node->left->pointer_depth, node->right->pointer_depth);
-                        }
-                    }
+        // Handle pointer dereferencing (* operator)
+        if (node->op && strcmp(node->op, "*") == 0) {
+            if (node->left->is_pointer && node->left->pointer_depth > 0) {
+                // Valid pointer dereference
+                node->is_pointer = (node->left->pointer_depth > 1);
+                node->pointer_depth = node->left->pointer_depth - 1;
+                node->is_array = false; // Dereferencing removes array property
+                node->array_dimensions = 0;
+                if (node->array_sizes) {
+                    free(node->array_sizes);
+                    node->array_sizes = NULL;
+                }
+                printf("DEBUG: Pointer dereference - depth %d -> %d\n", 
+                       node->left->pointer_depth, node->pointer_depth);
+            } else {
+                printf("Semantic Error at line %d: Invalid pointer dereferencing '%s' - not a pointer\n",
+                       node->line_number, node->op);
+            }
+        }
 
-                     if (node->left->is_array && node->right->is_array) {
-                        if (node->left->array_dimensions != node->right->array_dimensions) {
-                            printf("Semantic Error at line %d: Cannot compare pointers of different depths (%d vs %d)\n",
-                                   node->line_number, node->left->array_dimensions, node->right->array_dimensions);
-                        }
-                    }
-
-                    // Result of comparison is always boolean
-                    node->datatype = strdup("bool");
-                    node->is_pointer = false;
-                    node->pointer_depth = 0;
-                    node->size = 1;
+        // Handle address-of operator (&)
+        else if (node->op && strcmp(node->op, "&") == 0) {
+            // Check if we can take address of the operand
+            if (is_valid_lvalue(node->left)) {
+                node->is_pointer = true;
+                node->pointer_depth = node->left->pointer_depth + 1;
+                
+                // Arrays decay to pointers when taking address
+                if (node->left->is_array && node->left->array_dimensions > 0) {
+                    printf("DEBUG: Array decay to pointer in address-of operation\n");
                     node->is_array = false;
                     node->array_dimensions = 0;
                     if (node->array_sizes) {
@@ -2674,242 +3079,207 @@ case NODE_BINARY_OP: {
                         node->array_sizes = NULL;
                     }
                 }
-
-                // Logical operators: &&, ||
-                else if (op && (strcmp(op, "&&") == 0 || strcmp(op, "||") == 0)) {
-                    // Check if types can be used in logical context
-                    if (strcmp(node->left->datatype, "bool") != 0) {
-                        printf("Warning at line %d: Left operand of '%s' is not boolean (type: %s)\n",
-                               node->line_number, op, node->left->datatype);
-                    }
-                    if (strcmp(node->right->datatype, "bool") != 0) {
-                        printf("Warning at line %d: Right operand of '%s' is not boolean (type: %s)\n",
-                               node->line_number, op, node->right->datatype);
-                    }
-
-                    // Result is always boolean
-                    node->datatype = strdup("bool");
-                    node->is_pointer = false;
-                    node->pointer_depth = 0;
-                    node->size = 1;
-                }
-
-                // Bitwise operators: &, |, ^, <<, >>
-                else if (op && (strcmp(op, "&") == 0 || strcmp(op, "|") == 0 || strcmp(op, "^") == 0 ||
-                                strcmp(op, "<<") == 0 || strcmp(op, ">>") == 0)) {
-
-                    if (!types_compatible) {
-                        printf("Semantic Error at line %d: Bitwise operation '%s' between incompatible types '%s' and '%s'\n",
-                               node->line_number, op, node->left->datatype, node->right->datatype);
-                    }
-
-                    // Check for invalid types for bitwise operations
-                    if (strcmp(node->left->datatype, "float") == 0 || strcmp(node->left->datatype, "double") == 0 ||
-                        strcmp(node->right->datatype, "float") == 0 || strcmp(node->right->datatype, "double") == 0) {
-                        printf("Semantic Error at line %d: Bitwise operation '%s' not allowed on floating-point types\n",
-                               node->line_number, op);
-                    }
-
-                    if (strcmp(node->left->datatype, "string") == 0 || strcmp(node->right->datatype, "string") == 0) {
-                        printf("Semantic Error at line %d: Bitwise operation '%s' not allowed on string types\n",
-                               node->line_number, op);
-                    }
-
-                    // Pointer restrictions for bitwise operations
-                    if (node->left->is_pointer || node->right->is_pointer) {
-                        printf("Semantic Error at line %d: Bitwise operation '%s' not allowed with pointers\n",
-                               node->line_number, op);
-                    }
-
-                    // Type promotion for bitwise operations
-                    int prec1 = precedence(node->left->datatype);
-                    int prec2 = precedence(node->right->datatype);
-
-                    if (prec1 >= prec2) {
-                        node->datatype = strdup(node->left->datatype);
-                        copy_llvm_fields(node, node->left);
-                    } else {
-                        node->datatype = strdup(node->right->datatype);
-                        copy_llvm_fields(node, node->right);
-                    }
-                }
-
-                // Array/pointer specific checks
-                if (node->left->is_array && node->left->array_dimensions>0 || node->right->is_array && node->right->array_dimensions) {
-                    // Arrays decay to pointers in most expressions
-                    if (op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
-                               strcmp(op, "*") == 0 || strcmp(op, "/") == 0)) {
-                        printf("Warning at line %d: Array used in arithmetic operation '%s' (decays to pointer)\n",
-                               node->line_number, op);
-                    }
-                }
-
-                // Const correctness
-                if ((node->left->is_const || node->right->is_const) &&
-                    op && (strcmp(op, "=") == 0)) {
-                    printf("Semantic Error at line %d: Cannot assign to const operand\n",
-                           node->line_number);
-                }
-
-                // Struct type operations
-                if (node->left->struct_name || node->right->struct_name) {
-                    // Most operations on structs are not allowed
-                    if (op && !(strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 ||
-                                strcmp(op, "=") == 0)) {
-                        printf("Semantic Error at line %d: Operation '%s' not allowed on struct types\n",
-                               node->line_number, op);
-                    }
-
-                    // Struct comparison requires same struct type
-                    if ((strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) &&
-                        node->left->struct_name && node->right->struct_name) {
-                        if (strcmp(node->left->struct_name, node->right->struct_name) != 0) {
-                            printf("Semantic Error at line %d: Cannot compare different struct types '%s' and '%s'\n",
-                                   node->line_number, node->left->struct_name, node->right->struct_name);
-                        }
-                    }
-                }
-
-                // Function type operations
-                if (node->left->is_function || node->right->is_function) {
-                    printf("Semantic Error at line %d: Operation '%s' not allowed on function types\n",
-                           node->line_number, op);
-                }
-
-                // Default case for unhandled operators or compatible types
-                if (!node->datatype) {
-                    if (types_compatible) {
-                        int prec1 = precedence(node->left->datatype);
-                        int prec2 = precedence(node->right->datatype);
-
-                        if (prec1 >= prec2) {
-                            node->datatype = strdup(node->left->datatype);
-                            copy_llvm_fields(node, node->left);
-                        } else {
-                            node->datatype = strdup(node->right->datatype);
-                            copy_llvm_fields(node, node->right);
-                        }
-                    } else {
-                        printf("Semantic Error at line %d: Operation '%s' between incompatible types '%s' and '%s'\n",
-                               node->line_number, op, node->left->datatype, node->right->datatype);
-                        node->datatype = strdup("unknown");
-                    }
-                }
+                
+                printf("DEBUG: Address-of operator - depth %d -> %d\n",
+                       node->left->pointer_depth, node->pointer_depth);
+            } else {
+                printf("Semantic Error at line %d: Cannot take address of non-lvalue '%s'\n",
+                       node->line_number, 
+                       node->left->value ? node->left->value : node_type_to_string(node->left->type));
             }
-            break;
         }
 
-        case NODE_UNARY_OP: {
-            check_semantics(node->left, parent_scope);
-            if (node->left && node->left->datatype) {
-                // Free existing datatype if it exists
-                if (node->datatype) free(node->datatype);
-                node->datatype = strdup(node->left->datatype);
-                copy_llvm_fields(node, node->left);
+        // Handle increment/decrement operators (++ and --) - FIXED FOR PREFIX/POSTFIX
+        else if (node->op && (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0)) {
+            // NEW: Enhanced prefix/postfix distinction
+            bool is_prefix = !node->is_postfix;
+            
+            if (is_prefix) {
+                printf("DEBUG: Prefix %s operator at line %d\n", node->op, node->line_number);
+            } else {
+                printf("DEBUG: Postfix %s operator at line %d\n", node->op, node->line_number);
+            }
 
-                // Handle pointer dereferencing (* operator)
-                if (node->op && strcmp(node->op, "*") == 0) {
-                    if (node->is_pointer && node->pointer_depth > 0) {
-                        node->pointer_depth--;
-                        if (node->pointer_depth == 0) {
-                            node->is_pointer = false;
-                        }
-                    } else {
-                        printf("Semantic Error at line %d: Invalid pointer dereferencing '%s'\n",
-                               node->line_number, node->op);
-                    }
+            // Check if operand is an identifier or valid lvalue
+            if (!is_valid_lvalue(node->left)) {
+                printf("Semantic Error at line %d: Operator '%s' expects an lvalue (identifier, pointer dereference, array element, or member access), got '%s'\n",
+                       node->line_number, node->op,
+                       node->left->value ? node->left->value : node_type_to_string(node->left->type));
+            }
+
+            // Check if the type supports increment/decrement
+            if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0 ||
+                strcmp(node->datatype, "bool") == 0) {
+                printf("Semantic Error at line %d: Operation '%s' not defined on type '%s'\n",
+                       node->line_number, node->op, node->datatype);
+            }
+
+            // NEW: Check for pointer arithmetic restrictions
+            if (node->left->is_pointer && node->left->pointer_depth > 0) {
+                printf("Semantic Error at line %d: Increment/decrement not allowed on pointers\n",
+                       node->line_number);
+            }
+            
+            if (node->left->is_array && node->left->array_dimensions > 0) {
+                printf("Semantic Error at line %d: Increment/decrement not allowed on arrays\n",
+                       node->line_number);
+            }
+
+            // Check for const correctness
+            if (node->left->is_const) {
+                printf("Semantic Error at line %d: Cannot modify const variable with '%s' operator\n",
+                       node->line_number, node->op);
+            }
+            
+            // NEW: For postfix operations, the result type should be the original type (rvalue)
+            // For prefix operations, the result type is the modified lvalue
+            // This distinction is important for expression evaluation
+            if (!is_prefix) {
+                // Postfix: result is the original value (rvalue)
+                // The operation happens after value usage
+                printf("DEBUG: Postfix %s - result is rvalue of type '%s'\n", 
+                       node->op, node->datatype);
+            } else {
+                // Prefix: result is the modified lvalue  
+                // The operation happens before value usage
+                printf("DEBUG: Prefix %s - result is modified lvalue of type '%s'\n", 
+                       node->op, node->datatype);
+            }
+        }
+
+        // Handle unary plus/minus operators (+ and -)
+        else if (node->op && (strcmp(node->op, "+") == 0 || strcmp(node->op, "-") == 0)) {
+            // Check if the type supports arithmetic operations
+            if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0 ||
+                strcmp(node->datatype, "bool") == 0) {
+                printf("Semantic Error at line %d: Operation '%s' not defined on type '%s'\n",
+                       node->line_number, node->op, node->datatype);
+            }
+            
+            // NEW: Handle unary minus with unsigned types
+            if (strcmp(node->op, "-") == 0 && node->is_unsigned) {
+                printf("Warning at line %d: Unary minus applied to unsigned type '%s'\n",
+                       node->line_number, node->datatype);
+            }
+            
+            // NEW: Pointer restrictions for unary operators
+            if (node->left->is_pointer && node->left->pointer_depth > 0) {
+                printf("Semantic Error at line %d: Unary '%s' not allowed on pointers\n",
+                       node->line_number, node->op);
+            }
+            
+            if (node->left->is_array && node->left->array_dimensions > 0) {
+                printf("Semantic Error at line %d: Unary '%s' not allowed on arrays\n",
+                       node->line_number, node->op);
+            }
+        }
+
+        // Handle logical NOT operator (!)
+        else if (node->op && strcmp(node->op, "!") == 0) {
+            // Logical NOT can be applied to any type, but warn about non-boolean types
+            if (strcmp(node->datatype, "bool") != 0) {
+                printf("Warning at line %d: Logical NOT applied to non-boolean type '%s'\n",
+                       node->line_number, node->datatype);
+            }
+            
+            // NEW: Result of logical NOT is always boolean
+            if (node->datatype) free(node->datatype);
+            node->datatype = strdup("bool");
+            node->is_pointer = false;
+            node->pointer_depth = 0;
+            node->is_array = false;
+            node->array_dimensions = 0;
+            node->size = 1;
+            node->is_unsigned = false;
+            
+            if (node->array_sizes) {
+                free(node->array_sizes);
+                node->array_sizes = NULL;
+            }
+        }
+
+        // NEW: Handle bitwise NOT operator (~)
+        else if (node->op && strcmp(node->op, "~") == 0) {
+            // Check if type supports bitwise operations
+            if (strcmp(node->datatype, "float") == 0 || strcmp(node->datatype, "double") == 0 ||
+                strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "bool") == 0) {
+                printf("Semantic Error at line %d: Bitwise NOT '~' not allowed on type '%s'\n",
+                       node->line_number, node->datatype);
+            }
+            
+            // Pointer restrictions
+            if (node->left->is_pointer && node->left->pointer_depth > 0) {
+                printf("Semantic Error at line %d: Bitwise NOT '~' not allowed on pointers\n",
+                       node->line_number);
+            }
+            
+            if (node->left->is_array && node->left->array_dimensions > 0) {
+                printf("Semantic Error at line %d: Bitwise NOT '~' not allowed on arrays\n",
+                       node->line_number);
+            }
+        }
+
+        // Additional type compatibility checks for all unary operators
+        if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0) {
+            // Only allow certain operations on string/char types
+            if (node->op && (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0 ||
+                                  strcmp(node->op, "+") == 0 || strcmp(node->op, "-") == 0 ||
+                                  strcmp(node->op, "~") == 0)) {
+                printf("Semantic Error at line %d: Operation '%s' not defined on string or character type\n",
+                       node->line_number, node->op);
+            }
+        }
+
+        // NEW: Enhanced const correctness for all modifying operations
+        if (node->left->is_const && node->op &&
+            (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0)) {
+            printf("Semantic Error at line %d: Cannot modify const variable with '%s' operator\n",
+                   node->line_number, node->op);
+        }
+
+        // Validate pointer depth after operations
+        if (node->pointer_depth < 0) {
+            printf("Semantic Error at line %d: Invalid pointer depth after operation '%s'\n",
+                   node->line_number, node->op);
+        }
+        
+        // NEW: Validate array dimensions after operations
+        if (node->array_dimensions < 0) {
+            printf("Semantic Error at line %d: Invalid array dimensions after operation '%s'\n",
+                   node->line_number, node->op);
+        }
+        
+        // NEW: Debug output for complex operations
+        if (node->op && (strcmp(node->op, "&") == 0 || strcmp(node->op, "*") == 0)) {
+            printf("DEBUG: Unary op '%s' - result: type=%s, pointer=%d, depth=%d, array=%d, dims=%d\n",
+                   node->op, node->datatype, node->is_pointer, node->pointer_depth, 
+                   node->is_array, node->array_dimensions);
+        }
+    } else if (node->left && !node->left->datatype) {
+        printf("Semantic Error at line %d: Operand of unary operator '%s' has undefined type\n",
+               node->line_number, node->op ? node->op : "unknown");
+    }
+    break;
+}
+
+case NODE_POSTFIX_EXPR: {
+            // This case should handle postfix increment/decrement specifically
+            // but in our grammar, postfix inc/dec are handled in unary_expr with is_postfix flag
+            // So we need to ensure they're properly processed
+            
+            ASTNode* primary = node->child;
+            if (primary) {
+                check_semantics(primary, parent_scope);
+                
+                // Inherit type from primary expression
+                if (primary->datatype) {
+                    if (node->datatype) free(node->datatype);
+                    node->datatype = strdup(primary->datatype);
+                    copy_llvm_fields(node, primary);
                 }
-
-                // Handle address-of operator (&)
-                else if (node->op && strcmp(node->op, "&") == 0) {
-                    if (!node->left->is_array||(node->left->is_array&&node->left->array_dimensions>0)) {
-                        node->is_pointer = true;
-                        node->pointer_depth = node->left->pointer_depth + 1;
-                    }
-                    else if (!node->left->is_pointer||(node->left->is_pointer&&node->left->pointer_depth>0)) {
-                        node->is_pointer = true;
-                        node->pointer_depth = node->left->pointer_depth + 1;
-                    }
-                    else if(node->left->type!=  NODE_IDENTIFIER ){
-                        printf("Semantic Error at line %d: Cannot take address of pointer '%s'\n",
-                               node->line_number, node->left->value ? node->left->value : "");
-                    }
-                }
-
-                // Handle increment/decrement operators (++ and --)
-                else if (node->op && (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0)) {
-                    // Check if operand is an identifier or valid lvalue
-                    if (node->left->type != NODE_IDENTIFIER) {
-                        // Check if it's a pointer dereference that can be incremented
-                        if (node->left->type == NODE_UNARY_OP && node->left->op &&
-                            strcmp(node->left->op, "*") == 0) {
-                            // This is valid: (*ptr)++ or (*ptr)--
-                            // The dereferenced pointer can be modified
-                        }
-                        // Check if it's array indexing
-                        else if (node->left->type == NODE_INDEX) {
-                            // This is valid: arr[i]++ or arr[i]--
-                        }
-                        // Check if it's member access
-                        else if (node->left->type == NODE_MEMBER_ACCESS) {
-                            // This is valid: obj.member++ or obj.member--
-                        }
-                        else {
-                            printf("Semantic Error at line %d: Operator '%s' expects an lvalue (identifier, pointer dereference, array element, or member access), got '%s'\n",
-                                   node->line_number, node->op,
-                                   node->left->value ? node->left->value : node_type_to_string(node->left->type));
-                        }
-                    }
-
-                    // Check if the type supports increment/decrement
-                    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0 ||
-                        strcmp(node->datatype, "bool") == 0) {
-                        printf("Semantic Error at line %d: Operation '%s' not defined on type '%s'\n",
-                               node->line_number, node->op, node->datatype);
-                    }
-                }
-
-                // Handle unary plus/minus operators (+ and -)
-                else if (node->op && (strcmp(node->op, "+") == 0 || strcmp(node->op, "-") == 0)) {
-                    // Check if the type supports arithmetic operations
-                    if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0 ||
-                        strcmp(node->datatype, "bool") == 0) {
-                        printf("Semantic Error at line %d: Operation '%s' not defined on type '%s'\n",
-                               node->line_number, node->op, node->datatype);
-                    }
-                }
-
-                // Handle logical NOT operator (!)
-                else if (node->op && strcmp(node->op, "!") == 0) {
-                    // Logical NOT can be applied to any type, but warn about non-boolean types
-                    if (strcmp(node->datatype, "bool") != 0) {
-                        printf("Warning at line %d: Logical NOT applied to non-boolean type '%s'\n",
-                               node->line_number, node->datatype);
-                    }
-                }
-
-                // Additional type compatibility checks for all unary operators
-                if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char") == 0) {
-                    // Only allow certain operations on string/char types
-                    if (node->op && (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0 ||
-                                          strcmp(node->op, "+") == 0 || strcmp(node->op, "-") == 0)) {
-                        printf("Semantic Error at line %d: Operation '%s' not defined on string or character type\n",
-                               node->line_number, node->op);
-                    }
-                }
-
-                // Check for const correctness
-                if (node->left->is_const && node->op &&
-                    (strcmp(node->op, "++") == 0 || strcmp(node->op, "--") == 0)) {
-                    printf("Semantic Error at line %d: Cannot modify const variable with '%s' operator\n",
-                           node->line_number, node->op);
-                }
-
-                // Validate pointer depth after operations
-                if (node->pointer_depth < 0) {
-                    printf("Semantic Error at line %d: Invalid pointer depth after operation '%s'\n",
-                           node->line_number, node->op);
-                }
+                
+                // Handle postfix operations that might be here
+                // (array indexing, function calls, member access are already handled elsewhere)
             }
             break;
         }
@@ -3041,9 +3411,7 @@ case NODE_ASSIGNMENT: {
                            node->line_number, node->right->datatype, node->left->datatype);
                 }
 
-                printf("DEBUG: left node '%s' is_pointer (%d) pointer_depth (%d)\n",
-                       node->left->value ? node->left->value : "unknown",
-                       node->left->is_pointer, node->left->pointer_depth);
+                // Removed debug printf statement
 
 
                 // Pointer assignment rules (excluding array-to-pointer decay case)
@@ -3724,64 +4092,77 @@ case NODE_CONTINUE_STMT: {
             break;
         }
 
+        // ==================== GOTO STATEMENT (FIXED) ====================
 case NODE_GOTO_STMT: {
             if (node->value) {
                 // Check if label exists (would need label tracking)
                 printf("DEBUG: Goto label '%s' at line %d\n", node->value, node->line_number);
+                
+                // NEW: Set basic properties for GOTO statement
+                node->datatype = strdup("void");
+                node->is_pointer = false;
+                node->pointer_depth = 0;
+                node->is_array = false;
+                node->array_dimensions = 0;
+                node->is_reference = false;
+                node->is_function = false;
+                node->param_count = 0;
+                node->has_ellipsis = false;
+                node->size = 0;
+                node->is_const = false;
+                node->is_static = false;
+                node->is_unsigned = false;
+            } else {
+                printf("Semantic Error at line %d: Goto statement missing label\n", node->line_number);
             }
-
-            // FIXED: removed non-existent field 'is_control_flow'
             break;
         }
 
 
 
 
-
-case NODE_CAST_EXPR: {
+        // ==================== CAST EXPRESSIONS (NEW) ====================
+        case NODE_CAST_EXPR: {
             ASTNode* type_node = node->child;
-            // FIXED: removed unused variable 'expr'
             ASTNode* expr = type_node ? type_node->next : NULL;
 
             if (type_node) check_semantics(type_node, parent_scope);
-
+            if (expr) check_semantics(expr, parent_scope);
 
             // Set result type to cast type
             if (type_node && type_node->datatype) {
                 if (node->datatype) free(node->datatype);
                 node->datatype = strdup(type_node->datatype);
+                
                 // Copy LLVM fields from type node
                 copy_llvm_fields(node, type_node);
-            }
-            break;
-        }
-
-case NODE_SIZEOF_EXPR: {
-            ASTNode* expr = node->child;
-            if (expr) check_semantics(expr, parent_scope);
-
-            // sizeof always returns size_t (typically unsigned int)
-            if (node->datatype) free(node->datatype);
-            node->datatype = strdup("size_t");
-            node->size = 8; // Typically 64-bit on modern systems
-            node->is_unsigned = true;
-            node->is_pointer = false;
-            node->pointer_depth = 0;
-            node->is_array = false;
-            node->array_dimensions = 0;
-            if (node->array_sizes) {
-                free(node->array_sizes);
-                node->array_sizes = NULL;
-            }
-            node->is_reference = false;
-            node->is_function = false;
-            node->param_count = 0;
-            node->has_ellipsis = false;
-            node->is_const = false;
-            node->is_static = false;
-            if (node->struct_name) {
-                free(node->struct_name);
-                node->struct_name = NULL;
+                
+                printf("DEBUG: Cast expression at line %d: casting '%s' to '%s'\n", 
+                       node->line_number, 
+                       expr ? (expr->datatype ? expr->datatype : "unknown") : "unknown",
+                       type_node->datatype);
+                
+                // Validate cast compatibility
+                if (expr && expr->datatype) {
+                    if (!is_type_compatible(type_node->datatype, expr->datatype)) {
+                        printf("Warning at line %d: Cast from '%s' to '%s' may lose precision or be invalid\n",
+                               node->line_number, expr->datatype, type_node->datatype);
+                    }
+                    
+                    // Check for invalid pointer casts
+                    if ((type_node->is_pointer && !expr->is_pointer) || 
+                        (!type_node->is_pointer && expr->is_pointer)) {
+                        printf("Warning at line %d: Cast between pointer and non-pointer types\n",
+                               node->line_number);
+                    }
+                    
+                    // Check pointer depth compatibility
+                    if (type_node->is_pointer && expr->is_pointer && 
+                        type_node->pointer_depth != expr->pointer_depth) {
+                        printf("Warning at line %d: Cast changes pointer depth from %d to %d\n",
+                               node->line_number, expr->pointer_depth, type_node->pointer_depth);
+                    }
+                }
             }
             break;
         }
@@ -3873,7 +4254,7 @@ case NODE_IDENTIFIER: {
         }
 
         // ==================== ARGUMENT LIST ====================
-        case NODE_ARG_LIST: {
+case NODE_ARG_LIST: {
             ASTNode* arg = node->child;
             int arg_count = 0;
             check_semantics(arg, parent_scope);
@@ -3888,7 +4269,7 @@ case NODE_IDENTIFIER: {
         }
 
         // ==================== PARAMETER LIST ====================
-      case NODE_PARAM_LIST: {
+case NODE_PARAM_LIST: {
             ASTNode* param = node->child;
             int param_count = 0;
             bool has_varargs = false;
@@ -3911,7 +4292,7 @@ case NODE_IDENTIFIER: {
         }
 
         // ==================== VARIABLE ARGUMENTS ====================
-        case NODE_VAR_ARGS: {
+case NODE_VAR_ARGS: {
             node->datatype = strdup("...");
             node->has_ellipsis = true;
             break;
@@ -3937,54 +4318,76 @@ case NODE_DECLARATOR: {
         }
 
         // ==================== TYPE NODE ====================
-        case NODE_TYPE: {
-
-
+        
+case NODE_TYPE: {
             if (node->value) {
                 if (node->datatype) free(node->datatype);
                 node->datatype = strdup(node->value);
 
-                // Set type modifiers based on type name
-                set_type_modifiers(node, node->value);
+                // NEW: Enhanced type modifier detection for composite types
+                node->is_static = (strstr(node->value, "static") != NULL);
+                node->is_const = (strstr(node->value, "const") != NULL);
+                node->is_unsigned = (strstr(node->value, "unsigned") != NULL);
+                
+                // Extract base type for size calculation
+                char* base_type = node->value;
+                if (node->is_static) {
+                    // Skip "static " prefix for size calculation
+                    base_type = strstr(node->value, "static ");
+                    if (base_type) base_type += 7;
+                    else base_type = node->value;
+                }
+                if (node->is_const) {
+                    // Skip "const " prefix
+                    char* const_pos = strstr(base_type, "const ");
+                    if (const_pos) base_type = const_pos + 6;
+                }
+                if (node->is_unsigned) {
+                    // Skip "unsigned " prefix  
+                    char* unsigned_pos = strstr(base_type, "unsigned ");
+                    if (unsigned_pos) base_type = unsigned_pos + 9;
+                }
 
-                // Set basic type properties
-                if (strcmp(node->value, "void") == 0) {
+                // Set basic type properties using base_type
+                if (strcmp(base_type, "void") == 0) {
                     node->size = 0;
-                } else if (strcmp(node->value, "int") == 0 ||
-                          strcmp(node->value, "unsigned int") == 0) {
+                } else if (strcmp(base_type, "int") == 0) {
                     node->size = 4;
-                } else if (strcmp(node->value, "float") == 0) {
+                } else if (strcmp(base_type, "float") == 0) {
                     node->size = 4;
-                } else if (strcmp(node->value, "double") == 0) {
+                } else if (strcmp(base_type, "double") == 0) {
                     node->size = 8;
-                } else if (strcmp(node->value, "char") == 0 ||
-                          strcmp(node->value, "unsigned char") == 0) {
+                } else if (strcmp(base_type, "char") == 0) {
                     node->size = 1;
-                } else if (strcmp(node->value, "short") == 0) {
+                } else if (strcmp(base_type, "short") == 0) {
                     node->size = 2;
-                } else if (strcmp(node->value, "long") == 0) {
+                } else if (strcmp(base_type, "long") == 0) {
                     node->size = 8;
-                } else if (strcmp(node->value, "bool") == 0) {
+                } else if (strcmp(base_type, "bool") == 0) {
                     node->size = 1;
-                } else if (strstr(node->value, "struct") != NULL) {
+                } else if (strstr(base_type, "struct") != NULL) {
                     // Struct size will be calculated during struct processing
                     node->size = 0;
-                } else if (strcmp(node->value, "string") == 0) {
+                } else if (strcmp(base_type, "string") == 0) {
                     node->size = 8; // Pointer size
                     node->is_pointer = true;
                     node->pointer_depth = 1;
-                } else if (strcmp(node->value, "auto") == 0) {
+                } else if (strcmp(base_type, "auto") == 0) {
                     // Auto type - size determined later
                     node->size = 0;
+                } else {
+                    // Default size for unknown types
+                    node->size = 4;
                 }
+                
+                printf("DEBUG: Type node '%s' -> base_type '%s', size: %d, static: %d, const: %d, unsigned: %d\n",
+                       node->value, base_type, node->size, node->is_static, node->is_const, node->is_unsigned);
             }
             break;
         }
 
-
-
         // ==================== EMPTY STATEMENT ====================
-        case NODE_EMPTY: {
+case NODE_EMPTY: {
             printf("DEBUG: Processing empty statement\n");
             node->datatype = strdup("void");
             node->size = 0;
@@ -4003,7 +4406,7 @@ case NODE_DECLARATOR: {
         }
 
         // ==================== LAMBDA RETURN ====================
-        case NODE_LAMBDA_RET: {
+case NODE_LAMBDA_RET: {
 
             if (node->child && node->child->type == NODE_TYPE) {
                 check_semantics(node->child, parent_scope);
@@ -4019,14 +4422,14 @@ case NODE_DECLARATOR: {
         }
 
         // ==================== ACCESS SPECIFIER ====================
-        case NODE_ACCESS_SPEC: {
+case NODE_ACCESS_SPEC: {
             printf("DEBUG: Processing access specifier '%s'\n", node->value);
             // Access specifiers are mainly for C++ and don't affect type checking
             break;
         }
 
         // ==================== STATIC ASSERT ====================
-        case NODE_STATIC_ASSERT: {
+case NODE_STATIC_ASSERT: {
 
             ASTNode* condition = node->child;
             ASTNode* message = condition ? condition->next : NULL;
@@ -4044,7 +4447,7 @@ case NODE_DECLARATOR: {
         }
 
         // ==================== ATTRIBUTE EXPRESSION ====================
-        case NODE_ATTR_EXPR: {
+case NODE_ATTR_EXPR: {
 
             // Attributes don't affect type checking, just check the base expression
             if (node->child) {
@@ -4061,7 +4464,7 @@ case NODE_DECLARATOR: {
         }
 
         // ==================== ATOMIC EXPRESSION ====================
-        case NODE_ATOMIC_EXPR: {
+case NODE_ATOMIC_EXPR: {
 
             if (node->child) {
                 check_semantics(node->child, parent_scope);
@@ -4313,7 +4716,7 @@ case NODE_VA_LIST_TYPE: {
         // Handle other node types with default recursive checking
 
 
-         default:
+     default:
             // Recursively check all children for other node types
             ASTNode* child = node->child;
 
@@ -4504,7 +4907,7 @@ char* generate_string_constant_name() {
     static int string_counter = 0;
     char* name = malloc(32);
     sprintf(name, ".str%d", string_counter++);
-    return name;
+    return strdup(name);
 }
 
 // Helper function to generate unique format string names
@@ -4512,7 +4915,7 @@ char* generate_format_string_name() {
     static int format_counter = 0;
     char* name = malloc(32);
     sprintf(name, ".io_format_%d", format_counter++);
-    return name;
+    return strdup(name);
 }
 
 
@@ -4622,7 +5025,7 @@ char* generate_va_list_name() {
     static int va_list_counter = 0;
     char* name = malloc(32);
     sprintf(name, "%%va_list_%d", va_list_counter++);
-    return name;
+    return strdup(name);
 }
 
 
@@ -4693,6 +5096,7 @@ char* generate_lambda_call(ASTNode* lambda_ptr, ASTNode* args_node);
 int ends_with_unconditional_branch(ASTNode* node);
 char* get_literal_value_for_llvm(ASTNode* node);
 char* get_complete_llvm_type(ASTNode* node);
+char* get_llvm_base_type(char* datatype);
 /* ==================== LLVM IR GENERATION FUNCTIONS ==================== */
 
 int has_main_function = 0;
@@ -4702,15 +5106,15 @@ char current_function[64] = "";
 char* current_break_label = NULL;
 char* current_continue_label = NULL;
 char* generate_temp() {
-    char* temp = malloc(16);
-    sprintf(temp, "%%t%d", temp_counter++);
-    return temp;
+    char buffer[16];
+    sprintf(buffer, "%%t%d", temp_counter++);
+    return strdup(buffer);  // Clear ownership transfer
 }
 
 char* generate_label() {
     char* label = malloc(16);
     sprintf(label, "L%d", label_counter++);
-    return label;
+    return strdup(label);
 }
 
 void emit_llvm_ir(char* format, ...) {
@@ -4758,23 +5162,33 @@ char* get_llvm_type_from_semantic_for_type(char* datatype) {
     if (!datatype) return "i32";
 
     if (strcmp(datatype, "int") == 0 ||
-        strcmp(datatype, "unsigned int") == 0 ||
-        strcmp(datatype, "long") == 0 ||
-        strcmp(datatype, "short") == 0) {
+        strcmp(datatype, "unsigned int")||
+        strcmp(datatype, "static int") == 0) {
         return "i32";
     }
-    else if (strcmp(datatype, "float") == 0) {
+
+    else if (strcmp(datatype, "float") == 0||
+    strcmp(datatype, "static float")) {
         return "float";
     }
-    else if (strcmp(datatype, "double") == 0) {
+    else if (strcmp(datatype, "double") == 0 || strcmp(datatype, "static double")) {
         return "double";
+    }else if (strcmp(datatype, "long") == 0||
+    strcmp(datatype, "long long") == 0||
+    strcmp(datatype, "long int") == 0
+    ) {
+        return "i64";
     }
+
     else if (strcmp(datatype, "char") == 0 ||
              strcmp(datatype, "unsigned char") == 0) {
         return "i8";
     }
     else if (strcmp(datatype, "bool") == 0) {
         return "i1";
+    }
+    else if (strcmp(datatype, "short") == 0) {
+        return "i16";
     }
     else if (strcmp(datatype, "void") == 0) {
         return "void";
@@ -4840,10 +5254,14 @@ char* get_complete_llvm_type_for_global(GlobalDeclaration* decl) {
 
         // Get base type from datatype
         if (decl->datatype) {
-            if (strcmp(decl->datatype, "int") == 0) strcpy(base_type, "i32");
-            else if (strcmp(decl->datatype, "float") == 0) strcpy(base_type, "float");
-            else if (strcmp(decl->datatype, "double") == 0) strcpy(base_type, "double");
-            else if (strcmp(decl->datatype, "char") == 0) strcpy(base_type, "i8");
+            if (strcmp(decl->datatype, "int") == 0 ||strcmp(decl->datatype, "unsigned int") == 0 || strcmp(decl->datatype, "static int") == 0 ) strcpy(base_type, "i32");
+            else if (strcmp(decl->datatype, "float") == 0  || strcmp(decl->datatype, "static float") == 0) strcpy(base_type, "float");
+            else if (strcmp(decl->datatype, "double") == 0 || strcmp(decl->datatype, "static double") == 0) strcpy(base_type, "double");
+            else if (strcmp(decl->datatype, "char") == 0 || strcmp(decl->datatype, "unsigned char") == 0) strcpy(base_type, "i8");
+            else if(strcmp(decl->datatype, "long") == 0 || strcmp(decl->datatype, "long long") == 0 || strcmp(decl->datatype, "long int") == 0 || strcmp(decl->datatype, "static long") == 0) strcpy(base_type, "i64");
+            else if (strcmp(decl->datatype, "bool") == 0) strcpy(base_type, "i1");
+            else if (strcmp(decl->datatype, "short") == 0) strcpy(base_type, "i16");
+            else if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) strcpy(base_type, "i8*");
             else strcpy(base_type, "i32");
         } else {
             strcpy(base_type, "i32");
@@ -4868,13 +5286,14 @@ char* get_complete_llvm_type_for_global(GlobalDeclaration* decl) {
         // Scalar type
         if (decl->datatype) {
             if (strcmp(decl->datatype, "int") == 0) strcpy(type_str, "i32");
-            else if (strcmp(decl->datatype, "float") == 0) strcpy(type_str, "float");
-            else if (strcmp(decl->datatype, "double") == 0) strcpy(type_str, "double");
-            else if (strcmp(decl->datatype, "char") == 0) strcpy(type_str, "i8");
+            else if (strcmp(decl->datatype, "float") == 0  || strcmp(decl->datatype, "static float") == 0) strcpy(type_str, "float");
+            else if (strcmp(decl->datatype, "double") == 0 || strcmp(decl->datatype, "static double") == 0) strcpy(type_str, "double");
+            else if (strcmp(decl->datatype, "char") == 0 || strcmp(decl->datatype, "unsigned char") == 0) strcpy(type_str, "i8");
             else if (strcmp(decl->datatype, "void") == 0) strcpy(type_str, "void");
             else if (strcmp(decl->datatype, "bool") == 0) strcpy(type_str, "i1");
-            else if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0)
-                strcpy(type_str, "i8*");
+            else if (strcmp(decl->datatype, "short") == 0) strcpy(type_str, "i16");
+            else if(strcmp(decl->datatype, "long") == 0 || strcmp(decl->datatype, "long long") == 0 || strcmp(decl->datatype, "long int") == 0) strcpy(type_str, "i64");
+            else if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) strcpy(type_str, "i8*");
             else strcpy(type_str, "i32");
         } else {
             strcpy(type_str, "i32");
@@ -4884,6 +5303,56 @@ char* get_complete_llvm_type_for_global(GlobalDeclaration* decl) {
     return type_str;
 }
 
+char * get_alignment_str(char * llvm_type){
+    if(!llvm_type) return "align 4"; // Default fallback
+    
+    // Handle scalar types
+    if(strcmp(llvm_type,"i1")==0) return "align 1";
+    else if(strcmp(llvm_type,"i8")==0) return "align 1";
+    else if(strcmp(llvm_type,"i16")==0) return "align 2";
+    else if(strcmp(llvm_type,"i32")==0) return "align 4";
+    else if(strcmp(llvm_type,"i64")==0) return "align 8";
+    else if(strcmp(llvm_type,"float")==0) return "align 4";
+    else if(strcmp(llvm_type,"double")==0) return "align 8";
+    
+    // Handle pointer types (depth 1)
+    else if(strcmp(llvm_type,"i1*")==0) return "align 8";
+    else if(strcmp(llvm_type,"i8*")==0) return "align 8";
+    else if(strcmp(llvm_type,"i16*")==0) return "align 8";
+    else if(strcmp(llvm_type,"i32*")==0) return "align 8";
+    else if(strcmp(llvm_type,"i64*")==0) return "align 8";
+    else if(strcmp(llvm_type,"float*")==0) return "align 8";
+    else if(strcmp(llvm_type,"double*")==0) return "align 8";
+    
+    // Handle pointer-to-pointer types (depth 2)
+    else if(strcmp(llvm_type,"i1**")==0) return "align 8";
+    else if(strcmp(llvm_type,"i8**")==0) return "align 8";
+    else if(strcmp(llvm_type,"i16**")==0) return "align 8";
+    else if(strcmp(llvm_type,"i32**")==0) return "align 8";
+    else if(strcmp(llvm_type,"i64**")==0) return "align 8";
+    else if(strcmp(llvm_type,"float**")==0) return "align 8";
+    else if(strcmp(llvm_type,"double**")==0) return "align 8";
+    
+    // Handle array types (common cases)
+    else if(strstr(llvm_type, "[") != NULL) {
+        // For arrays, use the alignment of the base type
+        if(strstr(llvm_type, "i8") != NULL) return "align 1";
+        else if(strstr(llvm_type, "i16") != NULL) return "align 2";
+        else if(strstr(llvm_type, "i32") != NULL) return "align 4";
+        else if(strstr(llvm_type, "i64") != NULL) return "align 8";
+        else if(strstr(llvm_type, "float") != NULL) return "align 4";
+        else if(strstr(llvm_type, "double") != NULL) return "align 8";
+    }
+    
+    // Generic pointer detection - if type ends with '*'
+    int len = strlen(llvm_type);
+    if(len > 0 && llvm_type[len-1] == '*') {
+        return "align 8"; // All pointers get 8-byte alignment
+    }
+
+    return "align 4"; // Default fallback for unknown types
+}
+
 void emit_global_declarations() {
     // Set flag to ensure these go to global storage
     int old_collecting_flag = collecting_global_ir;
@@ -4891,21 +5360,14 @@ void emit_global_declarations() {
 
     for (int i = 0; i < global_decl_count; i++) {
         GlobalDeclaration* decl = &global_declarations[i];
-        char* llvm_type = get_llvm_type_from_semantic_for_type(decl->datatype);
-        char * align_str;
+        char* llvm_type = get_complete_llvm_type(decl);
+        char* base_llvm_type=strdup(llvm_type);
 
-        if(strcmp(llvm_type,"i1")==0)align_str="align 1";
-        else if(strcmp(llvm_type,"i8")==0)align_str="align 1";
-        else if(strcmp(llvm_type,"i16")==0)align_str="align 2";
-        else if(strcmp(llvm_type,"i32")==0)align_str="align 4";
-        else if(strcmp(llvm_type,"i64")==0)align_str="align 8";
-        else if(strcmp(llvm_type,"float")==0)align_str="align 4";
-        else if(strcmp(llvm_type,"double")==0)align_str="align 8";
-        else if(strcmp(llvm_type,"i8*")==0)align_str="align 4";
-        else if(strcmp(llvm_type,"i32*")==0)align_str="align 4";
-        else if(strcmp(llvm_type,"i64*")==0)align_str="align 8";
+        if(decl->is_array){
+            base_llvm_type=get_llvm_base_type(decl->datatype);
+        }
 
-
+        char * align_str=get_alignment_str(strdup(base_llvm_type));
 
         // Handle arrays
         if (decl->is_array && decl->array_dimensions > 0) {
@@ -4927,13 +5389,13 @@ void emit_global_declarations() {
         // Emit the global declaration (will be stored in global_ir_lines)
         if (decl->init_value) {
             if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) {
-                emit_llvm_ir("@%s = global i8* %s, align 4", decl->name, decl->init_value);
+                emit_llvm_ir("@%s = global i8* %s, align 8", decl->name, decl->init_value);
             } else {
                 emit_llvm_ir("@%s = global %s %s, %s", decl->name, llvm_type, decl->init_value,align_str);
             }
         } else {
             if (strcmp(decl->datatype, "string") == 0 || strcmp(decl->datatype, "char*") == 0) {
-                emit_llvm_ir("@%s = global i8* null, align 4", decl->name);
+                emit_llvm_ir("@%s = global i8* null, align 8", decl->name);
             } else {
                 emit_llvm_ir("@%s = global %s zeroinitializer, %s", decl->name, llvm_type,align_str);
             }
@@ -4949,8 +5411,6 @@ void emit_global_declarations() {
     collecting_global_ir = old_collecting_flag;
 }
 
-
-
 int is_global_scope() {
     return strcmp(current_function, "") == 0;
 }
@@ -4961,17 +5421,15 @@ char* get_format_specifier_for_node(ASTNode* node) {
 
     //char* llvm_type = get_complete_llvm_type(node);
 
-    if (strcmp(node->datatype, "int") == 0) return "%d";
+    if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "static int") == 0) return "%d";
     else if (strcmp(node->datatype, "unsigned int") == 0) return "%u";
     else if (strcmp(node->datatype, "short") == 0) return "%hd";
     else if (strcmp(node->datatype, "unsigned short") == 0) return "%hu";
     else if (strcmp(node->datatype, "long") == 0 || strcmp(node->datatype, "long int") == 0) return "%ld";
-    else if (strcmp(node->datatype, "unsigned long") == 0) return "%lu";
     else if (strcmp(node->datatype, "long long") == 0) return "%lld";
-    else if (strcmp(node->datatype, "unsigned long long") == 0) return "%llu";
 
-    else if (strcmp(node->datatype, "float") == 0) return "%f";
-    else if (strcmp(node->datatype, "double") == 0) return "%lf";
+    else if (strcmp(node->datatype, "float") == 0|| strcmp(node->datatype, "static float") == 0) return "%f";
+    else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "static double") == 0) return "%lf";
     else if (strcmp(node->datatype, "char") == 0) return "%c";
     else if (strcmp(node->datatype, "unsigned char") == 0) return "%c";
 
@@ -5016,25 +5474,25 @@ char* convert_value_for_io(char* value, char* from_type, char* to_type) {
     // Handle boolean to integer conversion
     if (value[0] == '!' && strcmp(to_type, "i32") == 0) {
         emit_llvm_ir("  %s = zext i1 %s to i32", result, value + 1);
-        return result;
+        return strdup(result);
     }
 
     // Handle integer to float conversion
     if (strcmp(from_type, "i32") == 0 && strcmp(to_type, "float") == 0) {
         emit_llvm_ir("  %s = sitofp i32 %s to float", result, value);
-        return result;
+        return strdup(result);
     }
 
     // Handle float to double conversion
     if (strcmp(from_type, "float") == 0 && strcmp(to_type, "double") == 0) {
         emit_llvm_ir("  %s = fpext float %s to double", result, value);
-        return result;
+        return strdup(result);
     }
 
     // Handle double to float conversion
     if (strcmp(from_type, "double") == 0 && strcmp(to_type, "float") == 0) {
         emit_llvm_ir("  %s = fptrunc double %s to float", result, value);
-        return result;
+        return strdup(result);
     }
 
     // Default: no conversion
@@ -5104,19 +5562,25 @@ char* load_variable_if_needed(ASTNode* node, char* name) {
     if (node->type == NODE_IDENTIFIER) {
         char* result = generate_temp();
         char* llvm_type = get_complete_llvm_type(node);
+        char* base_llvm_type=strdup(llvm_type);
+
+        if(node->is_array){
+            base_llvm_type=get_llvm_base_type(node->datatype);
+        }
+
 
         // Check if this is a static/global variable
         SymbolEntry* symbol = find_symbol(name);
         SymbolEntry* symbol2=find_symbol(strcat(strcat(current_function,"."),name));
         if (symbol && symbol->is_static) {
-            emit_llvm_ir("  %s = load %s, %s* @%s", result, llvm_type, llvm_type, name);
+            emit_llvm_ir("  %s = load %s, %s* @%s, %s", result, llvm_type, llvm_type, name,get_alignment_str(base_llvm_type));
         } else if(symbol2&&symbol2->is_static){
-          emit_llvm_ir("  %s = load %s, %s* @%s", result, llvm_type, llvm_type,symbol2->name);
+          emit_llvm_ir("  %s = load %s, %s* @%s, %s", result, llvm_type, llvm_type,symbol2->name,get_alignment_str(base_llvm_type));
         }
         else {
-            emit_llvm_ir("  %s = load %s, %s* %%%s", result, llvm_type, llvm_type, name);
+            emit_llvm_ir("  %s = load %s, %s* %%%s, %s", result, llvm_type, llvm_type, name,get_alignment_str(base_llvm_type));
         }
-        return result;
+        return strdup(result);
     }
     return strdup(name); // Return a copy if no load needed
 }
@@ -5129,13 +5593,13 @@ char* find_parameter_name(ASTNode* param_node) {
     ASTNode* child = param_node->child;
     while (child) {
         if (child->type == NODE_IDENTIFIER) {
-            return child->value;
+            return strdup(child->value);
         } else if (child->type == NODE_DECLARATOR) {
             // Look for identifier in declarator
             ASTNode* decl_child = child->child;
             while (decl_child) {
                 if (decl_child->type == NODE_IDENTIFIER) {
-                    return decl_child->value;
+                    return strdup(decl_child->value);
                 }
                 decl_child = decl_child->next;
             }
@@ -5209,6 +5673,7 @@ char* get_llvm_array_type(ASTNode* node) {
 
     return strdup(array_type);
 }
+
 char* get_index_value(ASTNode* index_node) {
     if (!index_node) return "0";
 
@@ -5266,21 +5731,20 @@ char* get_llvm_base_type(char* datatype) {
 
     if (strcmp(datatype, "int") == 0 ||
                 strcmp(datatype, "unsigned int") == 0 ||
-                strcmp(datatype, "short") == 0 ||
                 strcmp(datatype, "static int") == 0) {
                 return "i32";
             }
- else if(strcmp(datatype, "long") == 0 ||
+    
+ else if (strcmp(datatype, "long") == 0 ||
                    strcmp(datatype, "long int") == 0 ||
-                   strcmp(datatype, "long long") == 0
-            ){
+                   strcmp(datatype, "long long") == 0 ||
+                   strcmp(datatype, "static long") == 0) {
             return "i64";
             }
-      else if (strcmp(datatype, "float") == 0||strcmp(datatype, "unsigned float") == 0 ) {
+      else if (strcmp(datatype, "float") == 0||strcmp(datatype, "unsigned float") == 0 || strcmp(datatype, "static float") == 0) {
                 return "float";
             }
-            else if (strcmp(datatype, "double") == 0) {
-
+            else if (strcmp(datatype, "double") == 0 || strcmp(datatype, "static double") == 0 || strcmp(datatype, "unsigned double") == 0) {
                 return "double";
             }
             else if (strcmp(datatype, "char") == 0 ||
@@ -5290,6 +5754,9 @@ char* get_llvm_base_type(char* datatype) {
             }
             else if (strcmp(datatype, "bool") == 0) {
                 return "i1";
+            }
+            else if (strcmp(datatype, "short") == 0) {
+                return "i16";
             }
             else if (strcmp(datatype, "void") == 0) {
                 return "void";
@@ -5327,7 +5794,7 @@ char* get_llvm_pointer_base_type(char* llvm_type) {
         strcpy(base_type, "i32");
     }
 
-    return base_type;
+    return strdup(base_type);
 }
 
 // Main function to get complete LLVM type
@@ -5336,32 +5803,37 @@ char* get_complete_llvm_type(ASTNode* node) {
 
     if (!node) {
         strcpy(type_str, "i32");
-        return type_str;
+        return strdup(type_str);
     }
 
-// Handle pointers FIRST (highest priority)
-
-
-    // Handle multi-dimensional arrays
-    // Handle multi-dimensional arrays
-    if (node->is_array&& node->array_dimensions>0) {
+    printf("node type : %s \n",node->datatype);
+    
+    // Handle pointers correctly
+    if (node->is_pointer && node->pointer_depth > 0&&strcmp(node->datatype,"string")!=0) {
+        char* base_type = get_llvm_base_type(node->datatype);
+        strcpy(type_str, base_type);
+        for (int i = 0; i < node->pointer_depth; i++) {
+            char temp[512];
+            sprintf(temp, "%s*", type_str);
+            strcpy(type_str, temp);
+        }
+        return strdup(type_str);
+    }
+    // Handle arrays
+    else if (node->is_array && node->array_dimensions > 0) {
         char base_type[32];
 
         // Get base type from datatype
         if (node->datatype) {
-             if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "unsigned int") == 0) strcpy(base_type, "i32");
-            else if (strcmp(node->datatype, "unsigned float") == 0) strcpy(base_type, "float");
-            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0
-                        || strcmp(node->datatype, "long") == 0) strcpy(base_type, "i64");
-
-            else if (strcmp(node->datatype, "float") == 0) strcpy(base_type, "float");
-            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0) strcpy(base_type, "double");
-
+            if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "unsigned int") == 0 || strcmp(node->datatype, "static int") == 0) strcpy(base_type, "i32");
+            else if (strcmp(node->datatype, "unsigned float") == 0 || strcmp(node->datatype, "float") == 0 || strcmp(node->datatype, "static float") == 0) strcpy(base_type, "float");
+            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0 || strcmp(node->datatype, "long") == 0) strcpy(base_type, "i64");
+            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0 || strcmp(node->datatype, "static double") == 0) strcpy(base_type, "double");
             else if (strcmp(node->datatype, "char") == 0 || strcmp(node->datatype, "unsigned char") == 0) strcpy(base_type, "i8");
             else if (strcmp(node->datatype, "void") == 0) strcpy(base_type, "void");
-             else if (strcmp(node->datatype, "bool") == 0) strcpy(base_type, "i1");
+            else if (strcmp(node->datatype, "bool") == 0) strcpy(base_type, "i1");
+            else if (strcmp(node->datatype, "short") == 0) strcpy(base_type, "i16");
             else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) strcpy(base_type, "i8*");
-
             else strcpy(base_type, "i32");
         } else {
             strcpy(base_type, "i32");
@@ -5373,7 +5845,7 @@ char* get_complete_llvm_type(ASTNode* node) {
             sprintf(temp, "[%d x %s]", node->array_sizes[node->array_dimensions-1], base_type);
 
             // Handle multi-dimensional arrays
-            for (int i = node->array_dimensions-2; i >=0; i--) {
+            for (int i = node->array_dimensions-2; i >= 0; i--) {
                 char new_temp[512];
                 sprintf(new_temp, "[%d x %s]", node->array_sizes[i], temp);
                 strcpy(temp, new_temp);
@@ -5384,44 +5856,28 @@ char* get_complete_llvm_type(ASTNode* node) {
         }
 
         strcpy(type_str, temp);
-
-    }else  if (node->is_pointer && node->pointer_depth > 0) {
-                  printf("the ptr for llvm type is : %d \n",node->pointer_depth);
-                  char* base_type = get_llvm_base_type(node->datatype);
-                  strcpy(type_str, base_type);
-                  for (int i = 0; i < node->pointer_depth; i++) {
-                      char temp[512];
-                      sprintf(temp, "%s*", type_str);
-                      strcpy(type_str, temp);
-                  }
-                  printf("got type : %s  \n",type_str);
-                  return type_str;
-              }
-     else {
+    } else {
         // Scalar type
         if (node->datatype) {
+            
             if (strcmp(node->datatype, "int") == 0 || strcmp(node->datatype, "unsigned int") == 0 || strcmp(node->datatype, "static int") == 0) strcpy(type_str, "i32");
-            else if (strcmp(node->datatype, "unsigned float") == 0) strcpy(type_str, "float");
-
-            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0
-            || strcmp(node->datatype, "long") == 0) strcpy(type_str, "i64");
-
-            else if (strcmp(node->datatype, "float") == 0) strcpy(type_str, "float");
-            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0) strcpy(type_str, "double");
-
+            else if (strcmp(node->datatype, "unsigned float") == 0 || strcmp(node->datatype, "float") == 0 || strcmp(node->datatype, "static float") == 0) strcpy(type_str, "float");
+            else if (strcmp(node->datatype, "long long") == 0 || strcmp(node->datatype, "long int") == 0 || strcmp(node->datatype, "long") == 0 || strcmp(node->datatype, "static long") == 0) strcpy(type_str, "i64");
+            else if (strcmp(node->datatype, "double") == 0 || strcmp(node->datatype, "unsigned double") == 0 || strcmp(node->datatype, "static double") == 0) strcpy(type_str, "double");
             else if (strcmp(node->datatype, "char") == 0 || strcmp(node->datatype, "unsigned char") == 0) strcpy(type_str, "i8");
             else if (strcmp(node->datatype, "void") == 0) strcpy(type_str, "void");
             else if (strcmp(node->datatype, "bool") == 0) strcpy(type_str, "i1");
+            else if (strcmp(node->datatype, "short") == 0) strcpy(type_str, "i16");
             else if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) strcpy(type_str, "i8*");
             else strcpy(type_str, "i32");
         } else {
             strcpy(type_str, "i32");
         }
     }
-    return type_str;
+    printf("captured node type : %s \n",type_str);
+    return strdup(type_str);
 }
 
-// Generate local static variable declarations at global scope
 // Generate local static variable declarations at global scope
 void generate_local_static_declaration(ASTNode* node) {
     if (!node || node->type != NODE_VARIABLE_DECL || !node->is_static) return;
@@ -5434,6 +5890,11 @@ void generate_local_static_declaration(ASTNode* node) {
 
     char* var_name = NULL;
     char* llvm_type = get_complete_llvm_type(node);
+    char* base_llvm_type=strdup(llvm_type);
+
+    if(node->is_array){
+        base_llvm_type=get_llvm_base_type(node->datatype);
+    }
 
     // Extract variable name
     if (decl_node->type == NODE_IDENTIFIER) {
@@ -5476,7 +5937,7 @@ void generate_local_static_declaration(ASTNode* node) {
                     if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
                         emit_llvm_ir("@%s = internal global i8* %s", mangled_name, init_value);
                     } else {
-                        emit_llvm_ir("@%s = internal global %s %s, align 4", mangled_name, llvm_type, init_value);
+                        emit_llvm_ir("@%s = internal global %s %s, %s", mangled_name, llvm_type, init_value,get_alignment_str(base_llvm_type));
                     }
                     free(init_value);
                 } else {
@@ -5484,7 +5945,7 @@ void generate_local_static_declaration(ASTNode* node) {
                     if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
                         emit_llvm_ir("@%s = internal global i8* null", mangled_name);
                     } else {
-                        emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+                        emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", mangled_name, llvm_type,get_alignment_str(base_llvm_type));
                     }
                 }
             } else {
@@ -5492,7 +5953,7 @@ void generate_local_static_declaration(ASTNode* node) {
                 if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
                     emit_llvm_ir("@%s = internal global i8* null", mangled_name);
                 } else {
-                    emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+                    emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", mangled_name, llvm_type,get_alignment_str(base_llvm_type));
                 }
                 // Store the flag that this static needs runtime initialization
                 // We'll handle this during the function processing
@@ -5502,7 +5963,7 @@ void generate_local_static_declaration(ASTNode* node) {
             if (strcmp(node->datatype, "string") == 0 || strcmp(node->datatype, "char*") == 0) {
                 emit_llvm_ir("@%s = internal global i8* null", mangled_name);
             } else {
-                emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", mangled_name, llvm_type);
+                emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", mangled_name, llvm_type,get_alignment_str(base_llvm_type));
             }
         }
 
@@ -5552,10 +6013,11 @@ char* get_literal_value_for_llvm(ASTNode* node) {
             char* string_name = generate_string_constant_name();
 
             // Calculate actual string length (without quotes) and process escape sequences
-            char* string_content = node->value;
+            char* string_content = strdup(node->value);
             int len = strlen(string_content);
 
-            char processed_string[1024] = {0};
+            int processed_len = len + 1;
+            char* processed_string = malloc(processed_len);
             int j = 0;
             int in_string = 0;
 
@@ -5587,11 +6049,12 @@ char* get_literal_value_for_llvm(ASTNode* node) {
 
             // Add to string constants collection
             add_string_constant(string_name, processed_string, j + 1); // Include null terminator
+            free(processed_string);
 
             char* result = malloc(128);
             sprintf(result, "getelementptr inbounds ([%d x i8], [%d x i8]* @%s, i64 0, i64 0)",
                     j + 1, j + 1, string_name);
-            return result;
+            return strdup(result);
         }
         else if (strcmp(node->datatype, "char") == 0) {
             // Character literal
@@ -5611,14 +6074,14 @@ char* get_literal_value_for_llvm(ASTNode* node) {
             } else {
                 sprintf(result, "%d", (int)node->value[1]);
             }
-            return result;
+            return strdup(result);
         }
         else if (strcmp(node->datatype, "bool") == 0) {
             return (strcmp(node->value, "true") == 0) ? "1" : "0";
         }
         else {
             // Numeric literals (int, float)
-            return node->value;
+            return strdup(node->value);
         }
     }
 
@@ -5633,7 +6096,7 @@ char* get_local_static_name(char* var_name) {
 
     char* mangled_name = malloc(strlen(current_function) + strlen(var_name) + 2);
     sprintf(mangled_name, "%s.%s", current_function, var_name);
-    return mangled_name;
+    return strdup(mangled_name);
 }
 // Enhanced array type generation for MIPS compatibility
 char* get_array_llvm_type(ASTNode* node) {
@@ -5669,6 +6132,8 @@ void initialize_array_to_zero(char* array_name, ASTNode* array_decl, int is_glob
 
     char* array_type = get_complete_llvm_type(array_decl);
 
+   
+
     if (is_global) {
         // Global arrays are zero-initialized by LLVM
         emit_llvm_ir("  ; global array %s zero-initialized", array_name);
@@ -5677,21 +6142,47 @@ void initialize_array_to_zero(char* array_name, ASTNode* array_decl, int is_glob
         char* array_ptr = generate_temp();
         emit_llvm_ir("  %s = bitcast %s* %%%s to i8*", array_ptr, array_type, array_name);
 
-        // Calculate total size
-        int total_size = 4; // default for i32
+        // CORRECTED: Calculate total size based on element type and dimensions
+        int element_size = 4; // default for i32
+        
+        // Get element size from AST node type
+        if (array_decl->datatype) {
+            if (strcmp(array_decl->datatype, "char") == 0 || 
+                strcmp(array_decl->datatype, "unsigned char") == 0) {
+                element_size = 1;
+            } else if (strcmp(array_decl->datatype, "short") == 0) {
+                element_size = 2;
+            } else if (strcmp(array_decl->datatype, "int") == 0 || 
+                       strcmp(array_decl->datatype, "float") == 0 ||
+                       strcmp(array_decl->datatype, "unsigned int") == 0) {
+                element_size = 4;
+            } else if (strcmp(array_decl->datatype, "double") == 0 || 
+                       strcmp(array_decl->datatype, "long") == 0 ||
+                       strcmp(array_decl->datatype, "long long") == 0 ||
+                       strcmp(array_decl->datatype, "long int") == 0) {
+                element_size = 8;
+            } else if (strcmp(array_decl->datatype, "string") == 0) {
+                element_size = 8; // pointer size
+            }
+        }
+
+        // Calculate total bytes = element_size * array_size
+        int total_bytes = element_size;
         if (array_decl->array_sizes && array_decl->array_dimensions > 0) {
-            total_size = 4; // i32 size
             for (int i = 0; i < array_decl->array_dimensions; i++) {
-                total_size *= array_decl->array_sizes[i];
+                total_bytes *= array_decl->array_sizes[i];
             }
         }
 
         char* size_val = generate_temp();
-        emit_llvm_ir("  %s = mul i32 %d, %d", size_val,
-                    total_size / 4, 4); // Calculate bytes
+        emit_llvm_ir("  %s = add i32 %d, 0", size_val, total_bytes);
 
-        emit_llvm_ir("  call void @llvm.memset.p0i8.i32(i8* align 4 %s, i8 0, i32 %s, i1 false)",
-                    array_ptr, size_val);
+        // CORRECTED: Get proper alignment and fix memset call
+        char * base_type=get_llvm_base_type(array_decl->datatype);
+        const char* alignment_str = get_alignment_str(base_type);
+        
+        
+        emit_llvm_ir("  call void @llvm.memset.p0i8.i32(i8* %s %s, i8 0, i32 %s, i1 false)",alignment_str, array_ptr, size_val);
 
         free(array_ptr);
         free(size_val);
@@ -5724,6 +6215,11 @@ void initialize_array(char* array_name, char* array_type, ASTNode* init_node, AS
                     // Store element value with proper type
                     char* element_type = get_complete_llvm_type(element);
                     char* store_value = element_value;
+                    char * base_llvm_type=strdup(element_type);
+
+                    if(element->is_array){
+                        base_llvm_type=get_llvm_base_type(element->datatype);
+                    }
 
                     // Handle boolean values
                     if (element_value[0] == '!') {
@@ -5732,7 +6228,7 @@ void initialize_array(char* array_name, char* array_type, ASTNode* init_node, AS
                         free(element_value);
                     }
 
-                    emit_llvm_ir("  store %s %s, %s* %s", element_type, store_value, element_type, elem_ptr);
+                    emit_llvm_ir("  store %s %s, %s* %s, %s", element_type, store_value, element_type, elem_ptr,get_alignment_str(base_llvm_type));
 
                     if (store_value != element_value) free(store_value);
                 }
@@ -5751,10 +6247,12 @@ void allocate_array_variable(ASTNode* node, char* var_name, ASTNode* decl_node) 
 
     // Get the complete array type (e.g., [3 x i32])
     char* array_type = get_complete_llvm_type(node);
+    char* base_llvm_type=get_llvm_base_type(node->datatype);
 
     if (node->array_sizes && node->array_sizes[0] > 0) {
         // Static array allocation
-        emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, array_type);
+        printf("base size : %s \n",base_llvm_type);
+        emit_llvm_ir("  %%%s = alloca %s, %s", var_name, array_type,get_alignment_str(base_llvm_type));
 
         // Initialize array to zeros if no explicit initializer
         if (!(decl_node->type == NODE_ASSIGNMENT && decl_node->right)) {
@@ -5836,15 +6334,15 @@ char* generate_lambda_call(ASTNode* lambda_ptr, ASTNode* args_node) {
                 args_str[0] != '\0' ? args_str : "void",
                 args_str);
 
-    return result_temp;
+    return strdup(result_temp);
 }
 
 void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* init_node) {
     if (!init_node || init_node->type != NODE_INIT_LIST) return;
 
     char* array_type = get_complete_llvm_type(array_decl);
-    char * array_type_buffer=strdup(array_type);
-    printf("got array type %s \n",array_type);
+    char *array_type_buffer = strdup(array_type);
+    printf("got array type %s \n", array_type);
 
     // Recursive helper function for nested initialization
     void init_nested(ASTNode* list_node, char* base_ptr, int* indices, int depth, int max_depth) {
@@ -5860,25 +6358,34 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
                 // Nested initializer - recurse deeper
                 init_nested(element, base_ptr, indices, depth + 1, max_depth);
             } else {
+                
                 // Leaf element - generate store
                 char* element_value = generate_llvm_ir_from_ast(element);
                 if (element_value) {
                     char* elem_ptr = generate_temp();
 
                     // Build GEP indices string
-                    char indices_str[256] = "i32 0";
+                    char indices_str[256] = "i64 0";  // CORRECTED: Use i64 for 64-bit systems
                     for (int i = 0; i <= depth; i++) {
                         char temp[16];
-                        sprintf(temp, ", i32 %d", indices[i]);
+                        sprintf(temp, ", i32 %d", indices[i]);  // CORRECTED: Array indices are i32
                         strcat(indices_str, temp);
                     }
-                    printf("final array type %s \n",array_type);
+                    printf("final array type %s \n", array_type_buffer);
+
+                    // CORRECTED: Use the stored array_type_buffer
                     emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, %s",
                                 elem_ptr, array_type_buffer, array_type_buffer, array_name, indices_str);
 
                     // Get proper type for the element
                     char* element_type = get_complete_llvm_type(element);
+                    char* base_element_type=strdup(element_type);
+                    if(element->is_array)
+                    base_element_type=get_llvm_base_type(element->datatype);
+
                     char* store_value = element_value;
+
+                    printf("init list element : %s ,",element_value);
 
                     // Handle boolean values
                     if (element_value[0] == '!') {
@@ -5887,10 +6394,17 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
                         free(element_value);
                     }
 
-                    emit_llvm_ir("  store %s %s, %s* %s", element_type, store_value, element_type, elem_ptr);
+                    // CORRECTED: Get proper alignment for store
+                    const char* alignment_str = get_alignment_str(base_element_type);
+                    
+                    emit_llvm_ir("  store %s %s, %s* %s, %s", 
+                                element_type, store_value, element_type, elem_ptr, alignment_str);
 
                     if (store_value != element_value) free(store_value);
+                    if(elem_ptr)
                     free(elem_ptr);
+                    if(element_type)
+                    free(element_type);
                 }
             }
 
@@ -5899,9 +6413,19 @@ void initialize_multi_dim_array(char* array_name, ASTNode* array_decl, ASTNode* 
         }
     }
 
+    // CORRECTED: Initialize indices array properly
     int max_depth = array_decl->array_dimensions;
+    if (max_depth <= 0) {
+        free(array_type_buffer);
+        return;
+    }
+    
     int indices[max_depth];
+    memset(indices, 0, sizeof(indices));  // Initialize to zero
+    
     init_nested(init_node, array_name, indices, 0, max_depth);
+    printf("\n");
+    if(array_type_buffer)
     free(array_type_buffer);
 }
 
@@ -5913,6 +6437,8 @@ char* generate_llvm_ir_from_ast(ASTNode* node) {
 case NODE_LITERAL: {
     char* llvm_type = get_complete_llvm_type(node);
     char* literal_value = get_literal_value_for_llvm(node);
+
+    printf("liter type : %s , value : %s \n",llvm_type,literal_value);
 
     if (strcmp(llvm_type, "i8*") == 0) {
         // String literal - already handled in get_literal_value_for_llvm
@@ -5993,6 +6519,7 @@ case NODE_VARIABLE_DECL: {
                     else if (left_node->type == NODE_INDEX) {
                         // Array element assignment in declaration - get base identifier
                         ASTNode* current = left_node;
+                        printf("left node : %s \n",current->datatype);
                         while (current && current->type == NODE_INDEX) {
                             if (current->child && current->child->type == NODE_IDENTIFIER) {
                                 var_name = current->child->value;
@@ -6029,6 +6556,7 @@ case NODE_VARIABLE_DECL: {
                 }
 
                 if (var_name) {
+                    printf("var name : %s\n",var_name);
                     // Check if we're at global scope (not inside any function)
                     if (strcmp(current_function, "") == 0) {
                         // This is a global variable - add to global declarations collection
@@ -6048,6 +6576,12 @@ case NODE_VARIABLE_DECL: {
                     else {
                         // This is a local variable - use existing local variable handling
                         char* llvm_type = get_complete_llvm_type(node);
+                        printf("LLVM TYPE :%s \n",llvm_type);
+                        char * base_llvm_type=strdup(llvm_type);
+
+                        if(node->is_array){
+                                    base_llvm_type=get_llvm_base_type(node->datatype);
+                            }
 
                         // Handle LOCAL STATIC variables
                         if (node->is_static && strcmp(current_function, "") != 0) {
@@ -6070,7 +6604,7 @@ case NODE_VARIABLE_DECL: {
                                             collecting_global_ir=0;
                                         } else {
                                             collecting_global_ir=1;
-                                            emit_llvm_ir("@%s = internal global %s %s, align 4", static_var_name, llvm_type, local_init_value);
+                                            emit_llvm_ir("@%s = internal global %s %s, %s", static_var_name, llvm_type, local_init_value,get_alignment_str(base_llvm_type));
                                             collecting_global_ir=0;
                                         }
                                         free(local_init_value);
@@ -6082,7 +6616,7 @@ case NODE_VARIABLE_DECL: {
                                             collecting_global_ir=0;
                                         } else {
                                             collecting_global_ir=1;
-                                            emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", static_var_name, llvm_type);
+                                            emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", static_var_name, llvm_type,get_alignment_str(base_llvm_type));
                                             collecting_global_ir=0;
                                         }
                                     }
@@ -6094,7 +6628,7 @@ case NODE_VARIABLE_DECL: {
                                         collecting_global_ir=0;
                                     } else {
                                         collecting_global_ir=1;
-                                        emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", static_var_name, llvm_type);
+                                        emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", static_var_name, llvm_type,get_alignment_str(base_llvm_type));
                                         collecting_global_ir=0;
                                     }
                                 }
@@ -6133,10 +6667,10 @@ case NODE_VARIABLE_DECL: {
                                 // Initialize if needed
                                 if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
                                     char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
-                                    emit_llvm_ir("  store i8* %s, i8** %%%s", local_init_value, var_name);
+                                    emit_llvm_ir("  store i8* %s, i8** %%%s, align 8", local_init_value, var_name);
                                     free(local_init_value);
                                 } else {
-                                    emit_llvm_ir("  store i8* null, i8** %%%s", var_name);
+                                    emit_llvm_ir("  store i8* null, i8** %%%s, align 8", var_name);
                                 }
                             }
                         }
@@ -6146,8 +6680,10 @@ case NODE_VARIABLE_DECL: {
                                 // Global static with alignment
                                 if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
                                     char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    
+
                                     collecting_global_ir=1;
-                                    emit_llvm_ir("@%s = internal global %s %s, align 4", var_name, llvm_type, local_init_value);
+                                    emit_llvm_ir("@%s = internal global %s %s, %s", var_name, llvm_type, local_init_value,get_alignment_str(base_llvm_type));
                                     collecting_global_ir=0;
                                     free(local_init_value);
 
@@ -6158,7 +6694,7 @@ case NODE_VARIABLE_DECL: {
                                     }
                                 } else {
                                     collecting_global_ir=1;
-                                    emit_llvm_ir("@%s = internal global %s zeroinitializer, align 4", var_name, llvm_type);
+                                    emit_llvm_ir("@%s = internal global %s zeroinitializer, %s", var_name, llvm_type,get_alignment_str(base_llvm_type));
                                     collecting_global_ir=0;
                                 }
                             } else {
@@ -6168,10 +6704,12 @@ case NODE_VARIABLE_DECL: {
                         } else {
                             // Regular local variable - handle arrays and pointers with alignment
                             if (node->is_array) {
+                                char * base_llvm_type=get_llvm_base_type(node->datatype);
                                 // Enhanced multi-dimensional array allocation
                                 if (node->array_sizes && node->array_dimensions > 0) {
                                     // Static multi-dimensional array allocation
-                                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
+                                    
+                                    emit_llvm_ir("  %%%s = alloca %s, %s", var_name, llvm_type,get_alignment_str(base_llvm_type));
 
                                     // Initialize array if there's an initializer
                                     if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
@@ -6210,35 +6748,42 @@ case NODE_VARIABLE_DECL: {
                                 } else {
                                     // Local pointer - allocate space for the pointer itself
                                     char* base_type = get_llvm_pointer_base_type(strdup(llvm_type));
-                                    emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, type_buffer);
+                                    emit_llvm_ir("  %%%s = alloca %s, %s", var_name, type_buffer,get_alignment_str(base_llvm_type));
 
                                     // Initialize if needed
                                     if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
                                         char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
+                                    
 
                                         // For pointer assignment, we need to handle different cases:
                                         if (local_init_value && local_init_value[0] == '%') {
                                             // If it's a temporary value (address), store it directly
-                                            emit_llvm_ir("  store %s %s, %s* %%%s", type_buffer, local_init_value, type_buffer, var_name);
+                                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", type_buffer, local_init_value, type_buffer, var_name,get_alignment_str(base_llvm_type));
                                         } else {
                                             // For literal addresses or null
-                                            emit_llvm_ir("  store %s %s, %s* %%%s", type_buffer, local_init_value, type_buffer, var_name);
+                                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", type_buffer, local_init_value, type_buffer, var_name,get_alignment_str(base_llvm_type));
                                         }
                                         free(local_init_value);
                                     } else {
                                         // Initialize to null if no initial value
-                                        emit_llvm_ir("  store %s null, %s* %%%s", type_buffer, type_buffer, var_name);
+                                        emit_llvm_ir("  store %s null, %s* %%%s, %s", type_buffer, type_buffer, var_name,get_alignment_str(base_llvm_type));
                                     }
                                 }
                                 free(type_buffer);
                             } else {
                                 // Regular scalar variable with alignment
-                                emit_llvm_ir("  %%%s = alloca %s, align 4", var_name, llvm_type);
+                                char * stored_llvm_type=strdup(llvm_type);
+                                emit_llvm_ir("  %%%s = alloca %s, %s", var_name, llvm_type, get_alignment_str(base_llvm_type));
+                                llvm_type=strdup(stored_llvm_type);
+
+                                if(stored_llvm_type){
+                                    free(stored_llvm_type);
+                                }
 
                                 // Handle initialization
                                 if (decl_node->type == NODE_ASSIGNMENT && decl_node->right) {
                                     char* local_init_value = generate_llvm_ir_from_ast(decl_node->right);
-                                    emit_llvm_ir("  store %s %s, %s* %%%s, align 4", llvm_type, local_init_value, llvm_type, var_name);
+                                    emit_llvm_ir("  store %s %s, %s* %%%s, %s", llvm_type, local_init_value, llvm_type, var_name,get_alignment_str(base_llvm_type));
                                     free(local_init_value);
                                 }
                             }
@@ -6261,6 +6806,11 @@ case NODE_IDENTIFIER: {
 
             SymbolEntry* symbol = find_symbol(node->value);
             char* llvm_type = get_complete_llvm_type(node);
+            char * base_llvm_type=strdup(llvm_type);
+
+            if(node->is_array){
+                base_llvm_type=get_llvm_base_type(node->datatype);
+            }
 
             // Handle local static variables - check if there's a mangled name
             if (symbol && symbol->is_static && strcmp(current_function, "") != 0) {
@@ -6273,51 +6823,51 @@ case NODE_IDENTIFIER: {
                     // Use the mangled static variable name
                     // Handle string type
                     if (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0) {
-                        emit_llvm_ir("  %s = load i8*, i8** @%s", result, static_var_name);
+                        emit_llvm_ir("  %s = load i8*, i8** @%s, align 8", result, static_var_name);
                     } else {
-                        emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, static_var_name);
+                        emit_llvm_ir("  %s = load %s, %s* @%s, %s", result, llvm_type, llvm_type, static_var_name,get_alignment_str(base_llvm_type));
                     }
                 }
                 else{
                     if (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0) {
-                        emit_llvm_ir("  %s = load i8*, i8** @%s", result, symbol->name);
+                        emit_llvm_ir("  %s = load i8*, i8** @%s, align 8", result, symbol->name);
                     } else {
-                        emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, symbol->name);
+                        emit_llvm_ir("  %s = load %s, %s* @%s, %s", result, llvm_type, llvm_type, symbol->name,get_alignment_str(base_llvm_type));
                     }
                 }
 
-                return result;
+                return strdup(result);
             }
 
             // Handle string type
             if (symbol && (strcmp(symbol->datatype, "string") == 0 || strcmp(symbol->datatype, "char*") == 0)) {
                 char* result = generate_temp();
                 if (symbol->is_static) {
-                    emit_llvm_ir("  %s = load i8*, i8** @%s", result, node->value);
+                    emit_llvm_ir("  %s = load i8*, i8** @%s, align 8", result, node->value);
                 } else {
                     if(node->is_parameter)
-                        emit_llvm_ir("  %s = load i8*, i8** %%%s.addr", result, node->value);
+                        emit_llvm_ir("  %s = load i8*, i8** %%%s.addr, align 8", result, node->value);
                     else
-                        emit_llvm_ir("  %s = load i8*, i8** %%%s", result, node->value);
+                        emit_llvm_ir("  %s = load i8*, i8** %%%s, align 8", result, node->value);
                 }
-                return result;
+                return strdup(result);
             } else {
                 char* result = generate_temp();
                 // Check if this is a static/global variable
                 if (symbol && symbol->is_static) {
                     // Direct global variable access (simpler approach)
-                    emit_llvm_ir("  %s = load %s, %s* @%s, align 4", result, llvm_type, llvm_type, node->value);
+                    emit_llvm_ir("  %s = load %s, %s* @%s, %s", result, llvm_type, llvm_type, node->value,get_alignment_str(base_llvm_type));
                 } else {
                     // Local variable access with alignment
                     if(node->is_parameter)
-                        emit_llvm_ir("  %s = load %s, %s* %%%s.addr, align 4", result, llvm_type, llvm_type, node->value);
+                        emit_llvm_ir("  %s = load %s, %s* %%%s.addr, %s", result, llvm_type, llvm_type, node->value,get_alignment_str(base_llvm_type));
                     else if(node->is_array){
                         emit_llvm_ir("  %s =  getelementptr inbounds %s, %s* %%%s , i32 0, i32 0", result, llvm_type, llvm_type, node->value);
                     }
                     else
-                        emit_llvm_ir("  %s = load %s, %s* %%%s, align 4", result, llvm_type, llvm_type, node->value);
+                        emit_llvm_ir("  %s = load %s, %s* %%%s, %s", result, llvm_type, llvm_type, node->value,get_alignment_str(base_llvm_type));
                 }
-                return result;
+                return strdup(result);
             }
         }
 
@@ -6383,14 +6933,17 @@ case NODE_INDEX: {
     }
 
     char* array_type = get_complete_llvm_type(base_array);
+    char * array_base_type=get_llvm_base_type(base_array->datatype);
+
     char* element_ptr = generate_temp();
     char* result = generate_temp();
+
 
     // Build GEP instruction with all indices
     if (symbol->is_static) {
         // Global array
         char* load_temp = generate_temp();
-        emit_llvm_ir("  %s = load %s, %s* @%s, align 4", load_temp, array_type, array_type, array_name);
+        emit_llvm_ir("  %s = load %s, %s* @%s, %s", load_temp, array_type, array_type, array_name,get_alignment_str(array_base_type));
 
         // Build GEP with all indices
         char gep_str[512] = "";
@@ -6418,7 +6971,7 @@ case NODE_INDEX: {
                      element_ptr, array_type, array_type, array_name, gep_str);
     }
 
-    emit_llvm_ir("  %s = load i32, i32* %s, align 4", result, element_ptr);
+    emit_llvm_ir("  %s = load i32, i32* %s, %s", result, element_ptr,get_alignment_str(array_base_type));
 
     // Free temporary values
     free(element_ptr);
@@ -6426,7 +6979,7 @@ case NODE_INDEX: {
         if (index_values[i]) free(index_values[i]);
     }
 
-    return result;
+    return strdup(result);
 }
 
 case NODE_DECLARATOR: {
@@ -6437,10 +6990,12 @@ case NODE_DECLARATOR: {
     if (child && child->type == NODE_INDEX) {
         ASTNode* array_name_node = child->child;
         ASTNode* array_size_node = array_name_node ? array_name_node->next : NULL;
-
+        
         if (array_name_node && array_name_node->type == NODE_IDENTIFIER) {
             char* array_name = array_name_node->value;
             int array_size = 10; // Default size
+            char* base_llvm_type=get_llvm_base_type(array_name_node->datatype);
+
 
             // Get array size if specified
             if (array_size_node) {
@@ -6457,7 +7012,8 @@ case NODE_DECLARATOR: {
             // Allocate array (using malloc for dynamic arrays)
             if (array_size > 0) {
                 // Static array allocation
-                emit_llvm_ir("  %%%s = alloca [%d x i32]", array_name, array_size);
+                printf("base array size : %s \n",base_llvm_type);
+                emit_llvm_ir("  %%%s = alloca [%d x i32], %s", array_name, array_size,get_alignment_str(base_llvm_type));
             } else {
                 // Dynamic array allocation
                 char* size_bytes = generate_temp();
@@ -6526,33 +7082,11 @@ case NODE_UNARY_OP: {
         if (operand->type == NODE_IDENTIFIER) {
             SymbolEntry* symbol = find_symbol(operand->value);
             if (symbol) {
-                char* result = generate_temp();
-                char* operand_type = get_complete_llvm_type(operand);
-                char* pointer_type = malloc(strlen(operand_type) + 2);
-                sprintf(pointer_type, "%s*", operand_type);
-
-                // Only use bitcast if types are different
-                if (strcmp(operand_type, pointer_type) != 0) {
-                    if (symbol->is_static) {
-                        emit_llvm_ir("  %s = bitcast %s* @%s to %s", result,
-                                    operand_type, operand->value, pointer_type);
-                    } else {
-                        emit_llvm_ir("  %s = bitcast %s* %%%s to %s", result,
-                                    operand_type, operand->value, pointer_type);
-                    }
-                } else {
-                    // Same type - just use the address directly
-                    if (symbol->is_static) {
-                        emit_llvm_ir("  %s = bitcast %s* @%s to %s", result,
-                                    operand_type, operand->value, pointer_type);
-                    } else {
-                        emit_llvm_ir("  %s = bitcast %s* %%%s to %s", result,
-                                    operand_type, operand->value, pointer_type);
-                    }
-                }
-
-                free(pointer_type);
-                return result;
+                char* result = malloc(strlen(operand->value) + 2);  // +1 for % +1 for null terminator
+               if (result != NULL) {
+                   sprintf(result, "%%%s", operand->value);
+                  }
+                 return strdup(result);
             }
         }
         return NULL;
@@ -6574,10 +7108,10 @@ case NODE_UNARY_OP: {
         char* result = generate_temp();
 
         // Load through the pointer - the pointer value is already the correct type
-        emit_llvm_ir("  %s = load %s, %s %s", result, base_type, complete_type, ptr_value);
+        emit_llvm_ir("  %s = load %s, %s %s, %s", result, base_type, complete_type, ptr_value,get_alignment_str(base_type));
 
         free(ptr_value);
-        return result;
+        return strdup(result);
     }
 
     // Handle postfix increment/decrement (i++, i--)
@@ -6590,6 +7124,11 @@ case NODE_UNARY_OP: {
         if (!symbol) return NULL;
 
         char* llvm_type = get_complete_llvm_type(operand);
+        char* base_llvm_type=strdup(llvm_type);
+
+        if(operand->is_array){
+            base_llvm_type=get_llvm_base_type(operand->datatype);
+        }
 
         // Check if this is a pointer type
         if (symbol->is_pointer) {
@@ -6598,9 +7137,9 @@ case NODE_UNARY_OP: {
             // Load current pointer value (return value)
             char* old_ptr = generate_temp();
             if (symbol->is_static) {
-                emit_llvm_ir("  %s = load %s, %s* @%s", old_ptr, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", old_ptr, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  %s = load %s, %s* %%%s", old_ptr, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", old_ptr, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             // Calculate new pointer value using getelementptr
@@ -6617,9 +7156,9 @@ case NODE_UNARY_OP: {
 
             // Store new pointer value back
             if (symbol->is_static) {
-                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_ptr, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", llvm_type, new_ptr, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_ptr, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* %%%s, %s", llvm_type, new_ptr, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             free(new_ptr);
@@ -6630,9 +7169,9 @@ case NODE_UNARY_OP: {
             // Load current value (return value)
             char* old_val = generate_temp();
             if (symbol->is_static) {
-                emit_llvm_ir("  %s = load %s, %s* @%s", old_val, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", old_val, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  %s = load %s, %s* %%%s", old_val, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", old_val, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             // Calculate new value
@@ -6653,9 +7192,9 @@ case NODE_UNARY_OP: {
 
             // Store new value back
             if (symbol->is_static) {
-                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", llvm_type, new_val, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* %%%s, %s", llvm_type, new_val, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             free(new_val);
@@ -6672,6 +7211,11 @@ case NODE_UNARY_OP: {
         if (!symbol) return NULL;
 
         char* llvm_type = get_complete_llvm_type(operand);
+        char * base_llvm_type=strdup(llvm_type);
+
+        if(operand->is_array){
+            base_llvm_type=get_llvm_base_type(operand->datatype);
+        }
 
         // Check if this is a pointer type
         if (symbol->is_pointer) {
@@ -6680,9 +7224,9 @@ case NODE_UNARY_OP: {
             // Load current pointer value
             char* current_ptr = generate_temp();
             if (symbol->is_static) {
-                emit_llvm_ir("  %s = load %s, %s* @%s", current_ptr, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", current_ptr, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  %s = load %s, %s* %%%s", current_ptr, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", current_ptr, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             // Calculate new pointer value using getelementptr
@@ -6699,9 +7243,9 @@ case NODE_UNARY_OP: {
 
             // Store new pointer value back
             if (symbol->is_static) {
-                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_ptr, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", llvm_type, new_ptr, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_ptr, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* %%%s, %s", llvm_type, new_ptr, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             free(current_ptr);
@@ -6712,9 +7256,9 @@ case NODE_UNARY_OP: {
             // Load current value
             char* current_val = generate_temp();
             if (symbol->is_static) {
-                emit_llvm_ir("  %s = load %s, %s* @%s", current_val, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", current_val, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  %s = load %s, %s* %%%s", current_val, llvm_type, llvm_type, varname);
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", current_val, llvm_type, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             // Calculate new value
@@ -6735,9 +7279,9 @@ case NODE_UNARY_OP: {
 
             // Store new value back
             if (symbol->is_static) {
-                emit_llvm_ir("  store %s %s, %s* @%s", llvm_type, new_val, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", llvm_type, new_val, llvm_type, varname,get_alignment_str(base_llvm_type));
             } else {
-                emit_llvm_ir("  store %s %s, %s* %%%s", llvm_type, new_val, llvm_type, varname);
+                emit_llvm_ir("  store %s %s, %s* %%%s, %s", llvm_type, new_val, llvm_type, varname,get_alignment_str(base_llvm_type));
             }
 
             free(current_val);
@@ -6758,7 +7302,7 @@ case NODE_UNARY_OP: {
             emit_llvm_ir("  %s = sub nsw %s 0, %s", result, llvm_type, operand_val);
         }
         free(operand_val);
-        return result;
+        return strdup(result);
     }
     else if (strcmp(node->op, "!") == 0) {
         char* operand_val = generate_llvm_ir_from_ast(node->left);
@@ -6775,15 +7319,10 @@ case NODE_UNARY_OP: {
             emit_llvm_ir("  %s = icmp eq %s %s, 0", result, llvm_type, operand_val);
         }
 
-        // Return marked boolean
-        size_t len = strlen(result) + 2;
-        char* marked = malloc(len + 1);
-        marked[0] = '!';
-        strcpy(marked + 1, result);
 
         free(operand_val);
-        free(result);
-        return marked;
+        
+        return strdup(result);
     }
 
     // fallback -> evaluate child
@@ -6815,27 +7354,24 @@ case NODE_DO_WHILE_STMT: {
     // Condition evaluation
     if (condition_node && condition_node->type != NODE_EMPTY) {
         char* cond_value = generate_llvm_ir_from_ast(condition_node);
-        if (!cond_value) {
-            // treat as true (no condition)
-            emit_llvm_ir("  br label %%%s", body_label);
-        } else if (cond_value[0] == '!') {
-            // cond_value is like "!%tN" => already an i1 temp (skip the '!')
-            emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cond_value + 1, body_label, end_label);
+        if (cond_value) {
+            // Check if it's already a boolean (starts with '!')
+            if (strcmp(condition_node->datatype,"bool")==0) {
+                // Already a boolean temp - use directly
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cond_value + 1, body_label, end_label);
+            } else {
+                // Not a boolean - compare to zero
+                char* cmp_temp = generate_temp();
+                emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_temp, cond_value);
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cmp_temp, body_label, end_label);
+                free(cmp_temp);
+            }
             free(cond_value);
-        } else if (cond_value[0] == '%') {
-            // likely an i32 temp (not marked boolean) -> compare to zero
-            char* cmp_result = generate_temp();
-            emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-            emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cmp_result, body_label, end_label);
-            free(cond_value);
-            free(cmp_result);
         } else {
-            // numeric literal or other -> compare to zero
-            char* cmp_result = generate_temp();
-            emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-            emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cmp_result, body_label, end_label);
-            free(cond_value);
-            free(cmp_result);
+            // No condition value - treat as true
+            emit_llvm_ir("  br label %%%s", body_label);
         }
     } else {
         // No condition means infinite loop
@@ -6862,12 +7398,12 @@ case NODE_WHILE_STMT: {
     char* end_label = generate_label();
 
     // Store context for break/continue
-    // In a complete implementation, you'd push these to a stack
     char* old_break_label = current_break_label;
     char* old_continue_label = current_continue_label;
     current_break_label = end_label;
     current_continue_label = cond_label;
 
+    // Start with condition check
     emit_llvm_ir("  br label %%%s", cond_label);
     emit_llvm_ir("%s:", cond_label);
 
@@ -6875,27 +7411,26 @@ case NODE_WHILE_STMT: {
     if (condition_node && condition_node->type != NODE_EMPTY) {
         char* cond_value = generate_llvm_ir_from_ast(condition_node);
         if (cond_value) {
-            if (cond_value[0] == '!') {
-                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                            cond_value + 1, body_label, end_label);
-            } else if (cond_value[0] == '%') {
-                char* cmp_result = generate_temp();
-                emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                            cmp_result, body_label, end_label);
-                free(cmp_result);
+            // Check if it's already a boolean (starts with '!')
+            if (strcmp(condition_node->datatype,"bool")==0) {
+                // Already a boolean temp - use directly
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cond_value , body_label, end_label);
             } else {
-                char* cmp_result = generate_temp();
-                emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                            cmp_result, body_label, end_label);
-                free(cmp_result);
+                // Not a boolean - compare to zero
+                char* cmp_temp = generate_temp();
+                emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_temp, cond_value);
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cmp_temp, body_label, end_label);
+                free(cmp_temp);
             }
             free(cond_value);
         } else {
+            // No condition value - treat as true
             emit_llvm_ir("  br label %%%s", body_label);
         }
     } else {
+        // No condition means infinite loop
         emit_llvm_ir("  br label %%%s", body_label);
     }
 
@@ -6904,6 +7439,8 @@ case NODE_WHILE_STMT: {
     if (body_node) {
         generate_llvm_ir_from_ast(body_node);
     }
+    
+    // Jump back to condition check
     emit_llvm_ir("  br label %%%s", cond_label);
 
     // End label
@@ -6920,84 +7457,91 @@ case NODE_WHILE_STMT: {
 }
 
 case NODE_FOR_STMT: {
-            ASTNode* init_node = node->child;
-            ASTNode* condition_node = init_node ? init_node->next : NULL;
-            ASTNode* increment_node = condition_node ? condition_node->next : NULL;
-            ASTNode* body_node = increment_node ? increment_node->next : NULL;
+    ASTNode* init_node = node->child;
+    ASTNode* condition_node = init_node ? init_node->next : NULL;
+    ASTNode* increment_node = condition_node ? condition_node->next : NULL;
+    ASTNode* body_node = increment_node ? increment_node->next : NULL;
 
-            char* cond_label = generate_label();
-            char* body_label = generate_label();
-            char* inc_label = generate_label();
-            char* end_label = generate_label();
+    char* cond_label = generate_label();
+    char* body_label = generate_label();
+    char* inc_label = generate_label();
+    char* end_label = generate_label();
 
-            // Initialization
-            if (init_node && init_node->type != NODE_EMPTY) {
-                generate_llvm_ir_from_ast(init_node);
-            }
+    // Store context for break/continue
+    char* old_break_label = current_break_label;
+    char* old_continue_label = current_continue_label;
+    current_break_label = end_label;
+    current_continue_label = inc_label;
 
-            // Jump to condition check
-            emit_llvm_ir("  br label %%%s", cond_label);
-            emit_llvm_ir("%s:", cond_label);
+    // Initialization
+    if (init_node && init_node->type != NODE_EMPTY) {
+        generate_llvm_ir_from_ast(init_node);
+    }
 
-            // Condition evaluation - recognize boolean marker '!' returned by comparisons
-            if (condition_node && condition_node->type != NODE_EMPTY) {
-                char* cond_value = generate_llvm_ir_from_ast(condition_node);
-                if (!cond_value) {
-                    // treat as true (no condition)
-                    emit_llvm_ir("  br label %%%s", body_label);
-                } else if (cond_value[0] == '!') {
-                    // cond_value is like "!%tN" => already an i1 temp (skip the '!')
-                    emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cond_value + 1, body_label, end_label);
-                    free(cond_value);
-                } else if (cond_value[0] == '%') {
-                    // likely an i32 temp (not marked boolean) -> compare to zero
-                    char* cmp_result = generate_temp();
-                    emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-                    emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cmp_result, body_label, end_label);
-                    free(cond_value);
-                    free(cmp_result);
-                } else {
-                    // numeric literal or other -> compare to zero
-                    char* cmp_result = generate_temp();
-                    emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-                    emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", cmp_result, body_label, end_label);
-                    free(cond_value);
-                    free(cmp_result);
-                }
+    // Jump to condition check
+    emit_llvm_ir("  br label %%%s", cond_label);
+    emit_llvm_ir("%s:", cond_label);
+
+    // Condition evaluation
+    if (condition_node && condition_node->type != NODE_EMPTY) {
+        char* cond_value = generate_llvm_ir_from_ast(condition_node);
+        if (cond_value) {
+            // Check if it's already a boolean (starts with '!')
+            if (strcmp(condition_node->datatype,"bool")==0) {
+                // Already a boolean temp - use directly
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cond_value, body_label, end_label);
             } else {
-                // No condition means infinite loop
-                emit_llvm_ir("  br label %%%s", body_label);
+                // Not a boolean - compare to zero
+                char* cmp_temp = generate_temp();
+                emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_temp, cond_value);
+                emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                            cmp_temp, body_label, end_label);
+                free(cmp_temp);
             }
-
-            // Loop body
-            emit_llvm_ir("%s:", body_label);
-            if (body_node) {
-                generate_llvm_ir_from_ast(body_node);
-            }
-
-            // Jump to increment
-            emit_llvm_ir("  br label %%%s", inc_label);
-            emit_llvm_ir("%s:", inc_label);
-
-            // Increment step
-            if (increment_node && increment_node->type != NODE_EMPTY) {
-                generate_llvm_ir_from_ast(increment_node);
-            }
-
-            // Jump back to condition check
-            emit_llvm_ir("  br label %%%s", cond_label);
-
-            // End label
-            emit_llvm_ir("%s:", end_label);
-
-            // Free the labels
-            free(cond_label);
-            free(body_label);
-            free(inc_label);
-            free(end_label);
-
-            return NULL;
+            free(cond_value);
+        } else {
+            // No condition value - treat as true
+            emit_llvm_ir("  br label %%%s", body_label);
         }
+    } else {
+        // No condition means infinite loop
+        emit_llvm_ir("  br label %%%s", body_label);
+    }
+
+    // Loop body
+    emit_llvm_ir("%s:", body_label);
+    if (body_node) {
+        generate_llvm_ir_from_ast(body_node);
+    }
+
+    // Jump to increment
+    emit_llvm_ir("  br label %%%s", inc_label);
+    emit_llvm_ir("%s:", inc_label);
+
+    // Increment step
+    if (increment_node && increment_node->type != NODE_EMPTY) {
+        generate_llvm_ir_from_ast(increment_node);
+    }
+
+    // Jump back to condition check
+    emit_llvm_ir("  br label %%%s", cond_label);
+
+    // End label
+    emit_llvm_ir("%s:", end_label);
+
+    // Restore context
+    current_break_label = old_break_label;
+    current_continue_label = old_continue_label;
+
+    // Free the labels
+    free(cond_label);
+    free(body_label);
+    free(inc_label);
+    free(end_label);
+
+    return NULL;
+}
 
 case NODE_IF_STMT: {
     ASTNode* condition_node = node->child;
@@ -7010,55 +7554,47 @@ case NODE_IF_STMT: {
 
     // Generate condition
     char* cond_value = NULL;
-    if (condition_node) cond_value = generate_llvm_ir_from_ast(condition_node);
-
-    if (!cond_value) {
-        emit_llvm_ir("  br label %%%s", true_label);
-    } else if (cond_value[0] == '!') {
-        emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                    cond_value + 1, true_label, false_label);
-        free(cond_value);
-    } else if (cond_value[0] == '%') {
-        char* cmp_result = generate_temp();
-        emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-        emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                    cmp_result, true_label, false_label);
-        free(cond_value);
-        free(cmp_result);
-    } else {
-        char* cmp_result = generate_temp();
-        emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_result, cond_value);
-        emit_llvm_ir("  br i1 %s, label %%%s, label %%%s",
-                    cmp_result, true_label, false_label);
-        free(cond_value);
-        free(cmp_result);
+    if (condition_node) {
+        cond_value = generate_llvm_ir_from_ast(condition_node);
     }
 
-    // True branch - CRITICAL: Check if it ends with a break/return
+    if (cond_value) {
+        // Check if it's already a boolean (starts with '!')
+        if (strcmp(condition_node->datatype,"bool")==0) {
+            // Already a boolean temp - use directly
+            emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                        cond_value , true_label, false_label);
+        } else {
+            // Not a boolean - compare to zero
+            char* cmp_temp = generate_temp();
+            emit_llvm_ir("  %s = icmp ne i32 %s, 0", cmp_temp, cond_value);
+            emit_llvm_ir("  br i1 %s, label %%%s, label %%%s", 
+                        cmp_temp, true_label, false_label);
+            free(cmp_temp);
+        }
+        free(cond_value);
+    } else {
+        // No condition - always take true branch
+        emit_llvm_ir("  br label %%%s", true_label);
+    }
+
+    // True branch
     emit_llvm_ir("%s:", true_label);
     if (true_branch) {
         generate_llvm_ir_from_ast(true_branch);
-        // Only emit branch to end if true_branch doesn't already break/return
-        if (!ends_with_unconditional_branch(true_branch)) {
-            emit_llvm_ir("  br label %%%s", end_label);
-        }
-    } else {
-        emit_llvm_ir("  br label %%%s", end_label);
     }
+    // Jump to end after true branch (unless it already has a terminator)
+    emit_llvm_ir("  br label %%%s", end_label);
 
     // False branch
     emit_llvm_ir("%s:", false_label);
     if (false_branch) {
         generate_llvm_ir_from_ast(false_branch);
-        // Only emit branch to end if false_branch doesn't already break/return
-        if (!ends_with_unconditional_branch(false_branch)) {
-            emit_llvm_ir("  br label %%%s", end_label);
-        }
-    } else {
-        emit_llvm_ir("  br label %%%s", end_label);
     }
+    // Jump to end after false branch (unless it already has a terminator)
+    emit_llvm_ir("  br label %%%s", end_label);
 
-    // End label (only reached if no break/return in branches)
+    // End label
     emit_llvm_ir("%s:", end_label);
 
     free(true_label);
@@ -7068,7 +7604,6 @@ case NODE_IF_STMT: {
 }
 
 case NODE_BINARY_OP: {
-    // For binary operations, we need to load variable values (if identifiers)
     char* left_val = NULL;
     char* right_val = NULL;
     char* left_raw = NULL;
@@ -7077,27 +7612,57 @@ case NODE_BINARY_OP: {
     char* left_type = get_complete_llvm_type(node->left);
     char* right_type = get_complete_llvm_type(node->right);
 
-    // Use the dominant type for the operation
-    char* result_type = left_type;
-    if (strcmp(left_type, "double") == 0 || strcmp(right_type, "double") == 0) {
-        result_type = "double";
-    } else if (strcmp(left_type, "float") == 0 || strcmp(right_type, "float") == 0) {
-        result_type = "float";
+    printf("left : %s , right %s \n", left_type, right_type);
+    
+    char* left_base_type = strdup(left_type);
+    char* right_base_type = strdup(right_type);
+
+    if(node->left->is_array){
+        left_base_type = get_llvm_base_type(node->left->datatype);
     }
 
+    if(node->right->is_array){
+        right_base_type = get_llvm_base_type(node->right->datatype);
+    }
+
+    printf("left : %s , right %s \n", left_type, right_type);
+
+    // Use the dominant type for the operation
+    char* result_type = left_type;
+    
+    // Check if either type is floating point
+    int left_is_float = (strstr(left_type, "float") != NULL) || (strstr(left_type, "double") != NULL);
+    int right_is_float = (strstr(right_type, "float") != NULL) || (strstr(right_type, "double") != NULL);
+    
+    if (strstr(left_type, "double") != NULL || strstr(right_type, "double") != NULL) {
+        result_type = "double";
+    } else if (left_is_float || right_is_float) {
+        result_type = "float";
+    } else if (strstr(left_type, "i64") != NULL || strstr(right_type, "i64") != NULL) {
+        result_type = "i64";
+    } else if (strstr(left_type, "i32") != NULL || strstr(right_type, "i32") != NULL) {
+        result_type = "i32";
+    } else if (strstr(left_type, "i16") != NULL || strstr(right_type, "i16") != NULL) {
+        result_type = "i16";
+    } else if (strstr(left_type, "i8") != NULL || strstr(right_type, "i8") != NULL) {
+        result_type = "i8";
+    } else if (strstr(left_type, "i1") != NULL || strstr(right_type, "i1") != NULL) {
+        result_type = "i1";
+    }
+
+    // Handle identifier nodes (load values)
     if (node->left->type == NODE_IDENTIFIER) {
-        left_raw = strdup(node->left->value); // name of variable (no %)
+        left_raw = strdup(node->left->value);
         left_val = generate_temp();
         SymbolEntry* symbol = find_symbol(left_raw);
         if(symbol && symbol->is_static){
-            emit_llvm_ir("  %s = load %s, %s* @%s", left_val, left_type, left_type, left_raw);
-        }
-        else{
+            emit_llvm_ir("  %s = load %s, %s* @%s, %s", left_val, left_type, left_type, left_raw, get_alignment_str(left_base_type));
+        } else {
             if (node->left->is_parameter){
-            emit_llvm_ir("  %s = load %s, %s* %%%s.addr", left_val, left_type, left_type, left_raw);
+                emit_llvm_ir("  %s = load %s, %s* %%%s.addr, %s", left_val, left_type, left_type, left_raw, get_alignment_str(left_base_type));
+            } else {
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", left_val, left_type, left_type, left_raw, get_alignment_str(left_base_type));
             }
-            else
-            emit_llvm_ir("  %s = load %s, %s* %%%s", left_val, left_type, left_type, left_raw);
         }
     } else {
         left_val = generate_llvm_ir_from_ast(node->left);
@@ -7108,14 +7673,13 @@ case NODE_BINARY_OP: {
         right_val = generate_temp();
         SymbolEntry* symbol = find_symbol(right_raw);
         if(symbol && symbol->is_static){
-            emit_llvm_ir("  %s = load %s, %s* @%s", right_val, right_type, right_type, right_raw);
-        }
-        else{
+            emit_llvm_ir("  %s = load %s, %s* @%s, %s", right_val, right_type, right_type, right_raw, get_alignment_str(right_base_type));
+        } else {
             if(node->right->is_parameter){
-            emit_llvm_ir("  %s = load %s, %s* %%%s.addr", right_val, right_type, right_type, right_raw);
+                emit_llvm_ir("  %s = load %s, %s* %%%s.addr, %s", right_val, right_type, right_type, right_raw, get_alignment_str(right_base_type));
+            } else {
+                emit_llvm_ir("  %s = load %s, %s* %%%s, %s", right_val, right_type, right_type, right_raw, get_alignment_str(right_base_type));
             }
-            else
-            emit_llvm_ir("  %s = load %s, %s* %%%s", right_val, right_type, right_type, right_raw);
         }
     } else {
         right_val = generate_llvm_ir_from_ast(node->right);
@@ -7130,65 +7694,258 @@ case NODE_BINARY_OP: {
     char* converted_left = left_val;
     char* converted_right = right_val;
 
-    if (strcmp(left_type, result_type) != 0) {
-        converted_left = generate_temp();
-        if (strcmp(result_type, "double") == 0) {
-            if (strcmp(left_type, "float") == 0) {
-                emit_llvm_ir("  %s = fpext float %s to double", converted_left, left_val);
-            } else if (strcmp(left_type, "i32") == 0) {
-                emit_llvm_ir("  %s = sitofp i32 %s to double", converted_left, left_val);
-            }
-        } else if (strcmp(result_type, "float") == 0) {
-            if (strcmp(left_type, "double") == 0) {
-                emit_llvm_ir("  %s = fptrunc double %s to float", converted_left, left_val);
-            } else if (strcmp(left_type, "i32") == 0) {
-                emit_llvm_ir("  %s = sitofp i32 %s to float", converted_left, left_val);
-            }
-        }
+    printf("left : %s , right %s , result %s \n", left_type, right_type, result_type);
+
+   // Check if conversion needed for left operand
+if (strcmp(left_type, result_type) != 0) {
+    converted_left = generate_temp();
+    
+    // Convert to double
+    if ((strcmp(result_type, "double") == 0) && 
+        (strcmp(left_type, "i32") == 0 || strcmp(left_type, "i64") == 0 || 
+         strcmp(left_type, "i16") == 0 || strcmp(left_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sitofp %s %s to double", converted_left, left_type, left_val);
+    } 
+    // Convert to float
+    else if ((strcmp(result_type, "float") == 0) && 
+             (strcmp(left_type, "i32") == 0 || strcmp(left_type, "i64") == 0 || 
+              strcmp(left_type, "i16") == 0 || strcmp(left_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sitofp %s %s to float", converted_left, left_type, left_val);
+    } 
+    // Float to double extension
+    else if ((strcmp(result_type, "double") == 0) && (strcmp(left_type, "float") == 0)) {
+        emit_llvm_ir("  %s = fpext float %s to double", converted_left, left_val);
+    } 
+    // Double to float truncation
+    else if ((strcmp(result_type, "float") == 0) && (strcmp(left_type, "double") == 0)) {
+        emit_llvm_ir("  %s = fptrunc double %s to float", converted_left, left_val);
+    }
+    // Convert to i64 (sign extension)
+    else if ((strcmp(result_type, "i64") == 0) && 
+             (strcmp(left_type, "i32") == 0 || strcmp(left_type, "i16") == 0 || 
+              strcmp(left_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i64", converted_left, left_type, left_val);
+    }
+    // Convert to i32 (sign extension)
+    else if ((strcmp(result_type, "i32") == 0) && 
+             (strcmp(left_type, "i16") == 0 || strcmp(left_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i32", converted_left, left_type, left_val);
+    }
+    // Convert to i16 (sign extension)
+    else if ((strcmp(result_type, "i16") == 0) && (strcmp(left_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i16", converted_left, left_type, left_val);
+    }
+    // Convert from i64 to smaller integers (truncation)
+    else if ((strcmp(left_type, "i64") == 0) && 
+             (strcmp(result_type, "i32") == 0 || strcmp(result_type, "i16") == 0 || 
+              strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i64 %s to %s", converted_left, left_val, result_type);
+    }
+    // Convert from i32 to smaller integers (truncation)
+    else if ((strcmp(left_type, "i32") == 0) && 
+             (strcmp(result_type, "i16") == 0 || strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i32 %s to %s", converted_left, left_val, result_type);
+    }
+    // Convert from i16 to i8 (truncation)
+    else if ((strcmp(left_type, "i16") == 0) && (strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i16 %s to i8", converted_left, left_val);
+    }
+    // Floating point to integer conversion
+    else if ((strcmp(result_type, "i32") == 0 || strcmp(result_type, "i64") == 0 || 
+              strcmp(result_type, "i16") == 0 || strcmp(result_type, "i8") == 0) &&
+             (strcmp(left_type, "float") == 0 || strcmp(left_type, "double") == 0)) {
+        emit_llvm_ir("  %s = fptosi %s %s to %s", converted_left, left_type, left_val, result_type);
+    }
+    // Integer to integer (same size but different signedness - use bitcast)
+    else if ((strcmp(result_type, "i32") == 0 && strcmp(left_type, "i32") == 0) ||
+             (strcmp(result_type, "i64") == 0 && strcmp(left_type, "i64") == 0) ||
+             (strcmp(result_type, "i16") == 0 && strcmp(left_type, "i16") == 0) ||
+             (strcmp(result_type, "i8") == 0 && strcmp(left_type, "i8") == 0)) {
+        // For same-size integers with different signedness, use bitcast
+        emit_llvm_ir("  %s = bitcast %s %s to %s", converted_left, left_type, left_val, result_type);
+    }
+    // Pointer type conversions
+    else if (strstr(result_type, "*") != NULL && strstr(left_type, "*") != NULL) {
+        // Pointer to pointer conversion - use bitcast
+        emit_llvm_ir("  %s = bitcast %s %s to %s", converted_left, left_type, left_val, result_type);
+    }
+    else {
+        // No conversion available or not supported - use original value
+        converted_left = left_val;
+    }
     }
 
-    if (strcmp(right_type, result_type) != 0) {
-        converted_right = generate_temp();
-        if (strcmp(result_type, "double") == 0) {
-            if (strcmp(right_type, "float") == 0) {
-                emit_llvm_ir("  %s = fpext float %s to double", converted_right, right_val);
-            } else if (strcmp(right_type, "i32") == 0) {
-                emit_llvm_ir("  %s = sitofp i32 %s to double", converted_right, right_val);
-            }
-        } else if (strcmp(result_type, "float") == 0) {
-            if (strcmp(right_type, "double") == 0) {
-                emit_llvm_ir("  %s = fptrunc double %s to float", converted_right, right_val);
-            } else if (strcmp(right_type, "i32") == 0) {
-                emit_llvm_ir("  %s = sitofp i32 %s to float", converted_right, right_val);
-            }
-        }
+  // Check if conversion needed for right operand  
+if (strcmp(right_type, result_type) != 0) {
+    converted_right = generate_temp();
+    
+    // Convert to double
+    if ((strcmp(result_type, "double") == 0) && 
+        (strcmp(right_type, "i32") == 0 || strcmp(right_type, "i64") == 0 || 
+         strcmp(right_type, "i16") == 0 || strcmp(right_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sitofp %s %s to double", converted_right, right_type, right_val);
+    } 
+    // Convert to float
+    else if ((strcmp(result_type, "float") == 0) && 
+             (strcmp(right_type, "i32") == 0 || strcmp(right_type, "i64") == 0 || 
+              strcmp(right_type, "i16") == 0 || strcmp(right_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sitofp %s %s to float", converted_right, right_type, right_val);
+    } 
+    // Float to double extension
+    else if ((strcmp(result_type, "double") == 0) && (strcmp(right_type, "float") == 0)) {
+        emit_llvm_ir("  %s = fpext float %s to double", converted_right, right_val);
+    } 
+    // Double to float truncation
+    else if ((strcmp(result_type, "float") == 0) && (strcmp(right_type, "double") == 0)) {
+        emit_llvm_ir("  %s = fptrunc double %s to float", converted_right, right_val);
+    }
+    // Convert to i64 (sign extension)
+    else if ((strcmp(result_type, "i64") == 0) && 
+             (strcmp(right_type, "i32") == 0 || strcmp(right_type, "i16") == 0 || 
+              strcmp(right_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i64", converted_right, right_type, right_val);
+    }
+    // Convert to i32 (sign extension)
+    else if ((strcmp(result_type, "i32") == 0) && 
+             (strcmp(right_type, "i16") == 0 || strcmp(right_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i32", converted_right, right_type, right_val);
+    }
+    // Convert to i16 (sign extension)
+    else if ((strcmp(result_type, "i16") == 0) && (strcmp(right_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = sext %s %s to i16", converted_right, right_type, right_val);
+    }
+    // Convert from i64 to smaller integers (truncation)
+    else if ((strcmp(right_type, "i64") == 0) && 
+             (strcmp(result_type, "i32") == 0 || strcmp(result_type, "i16") == 0 || 
+              strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i64 %s to %s", converted_right, right_val, result_type);
+    }
+    // Convert from i32 to smaller integers (truncation)
+    else if ((strcmp(right_type, "i32") == 0) && 
+             (strcmp(result_type, "i16") == 0 || strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i32 %s to %s", converted_right, right_val, result_type);
+    }
+    // Convert from i16 to i8 (truncation)
+    else if ((strcmp(right_type, "i16") == 0) && (strcmp(result_type, "i8") == 0)) {
+        emit_llvm_ir("  %s = trunc i16 %s to i8", converted_right, right_val);
+    }
+    // Floating point to integer conversion
+    else if ((strcmp(result_type, "i32") == 0 || strcmp(result_type, "i64") == 0 || 
+              strcmp(result_type, "i16") == 0 || strcmp(result_type, "i8") == 0) &&
+             (strcmp(right_type, "float") == 0 || strcmp(right_type, "double") == 0)) {
+        emit_llvm_ir("  %s = fptosi %s %s to %s", converted_right, right_type, right_val, result_type);
+    }
+    // Integer to integer (same size but different signedness - use bitcast)
+    else if ((strcmp(result_type, "i32") == 0 && strcmp(right_type, "i32") == 0) ||
+             (strcmp(result_type, "i64") == 0 && strcmp(right_type, "i64") == 0) ||
+             (strcmp(result_type, "i16") == 0 && strcmp(right_type, "i16") == 0) ||
+             (strcmp(result_type, "i8") == 0 && strcmp(right_type, "i8") == 0)) {
+        // For same-size integers with different signedness, use bitcast
+        emit_llvm_ir("  %s = bitcast %s %s to %s", converted_right, right_type, right_val, result_type);
+    }
+    // Pointer type conversions
+    else if (strstr(result_type, "*") != NULL && strstr(right_type, "*") != NULL) {
+        // Pointer to pointer conversion - use bitcast
+        emit_llvm_ir("  %s = bitcast %s %s to %s", converted_right, right_type, right_val, result_type);
+    }
+    else {
+        // No conversion available or not supported - use original value
+        converted_right = right_val;
+    }
     }
 
-    // modulus
-    if (strcmp(node->op, "%") == 0) {
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
-            // Floating point modulus
+    // Determine if operation is floating point
+    int is_float_op = (strcmp(result_type, "float") == 0) || (strcmp(result_type, "double") == 0);
+    int is_integer_op = !is_float_op && strcmp(result_type, "i1") != 0;
+
+    // ========== ARITHMETIC OPERATORS ==========
+    if (strcmp(node->op, "+") == 0) {
+        if (is_float_op) {
+            emit_llvm_ir("  %s = fadd %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  %s = add nsw %s %s, %s", result, result_type, converted_left, converted_right);
+        }
+    } 
+    else if (strcmp(node->op, "-") == 0) {
+        if (is_float_op) {
+            emit_llvm_ir("  %s = fsub %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  %s = sub nsw %s %s, %s", result, result_type, converted_left, converted_right);
+        }
+    } 
+    else if (strcmp(node->op, "*") == 0) {
+        if (is_float_op) {
+            emit_llvm_ir("  %s = fmul %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  %s = mul nsw %s %s, %s", result, result_type, converted_left, converted_right);
+        }
+    } 
+    else if (strcmp(node->op, "/") == 0) {
+        if (is_float_op) {
+            emit_llvm_ir("  %s = fdiv %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  %s = sdiv %s %s, %s", result, result_type, converted_left, converted_right);
+        }
+    } 
+    else if (strcmp(node->op, "%") == 0) {
+        if (is_float_op) {
             emit_llvm_ir("  %s = frem %s %s, %s", result, result_type, converted_left, converted_right);
         } else {
-            // Integer modulus
             emit_llvm_ir("  %s = srem %s %s, %s", result, result_type, converted_left, converted_right);
         }
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        return result; // temp
     }
 
-    // relational/comparison ops -> icmp/fcmp (return marked boolean '!%tN')
-    if (strcmp(node->op, "<") == 0 ||
-        strcmp(node->op, "<=") == 0 ||
-        strcmp(node->op, ">") == 0 ||
-        strcmp(node->op, ">=") == 0 ||
-        strcmp(node->op, "==") == 0 ||
-        strcmp(node->op, "!=") == 0) {
+    // ========== BITWISE OPERATORS ==========
+    else if (strcmp(node->op, "&") == 0) {
+        if (is_integer_op) {
+            emit_llvm_ir("  %s = and %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise AND on non-integer type");
+            emit_llvm_ir("  %s = and i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "|") == 0) {
+        if (is_integer_op) {
+            emit_llvm_ir("  %s = or %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise OR on non-integer type");
+            emit_llvm_ir("  %s = or i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "^") == 0) {
+        if (is_integer_op) {
+            emit_llvm_ir("  %s = xor %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise XOR on non-integer type");
+            emit_llvm_ir("  %s = xor i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "<<") == 0) {
+        if (is_integer_op) {
+            emit_llvm_ir("  %s = shl %s %s, %s", result, result_type, converted_left, converted_right);
+        } else {
+            emit_llvm_ir("  ; ERROR: Left shift on non-integer type");
+            emit_llvm_ir("  %s = shl i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, ">>") == 0) {
+        if (is_integer_op) {
+            // Use arithmetic right shift for signed integers, logical for unsigned
+            if (node->left->datatype && strstr(node->left->datatype, "unsigned") != NULL) {
+                emit_llvm_ir("  %s = lshr %s %s, %s", result, result_type, converted_left, converted_right);
+            } else {
+                emit_llvm_ir("  %s = ashr %s %s, %s", result, result_type, converted_left, converted_right);
+            }
+        } else {
+            emit_llvm_ir("  ; ERROR: Right shift on non-integer type");
+            emit_llvm_ir("  %s = ashr i32 0, 0", result);
+        }
+    }
+
+    // ========== RELATIONAL OPERATORS ==========
+    else if (strcmp(node->op, "==") == 0 || strcmp(node->op, "!=") == 0 ||
+             strcmp(node->op, "<") == 0 || strcmp(node->op, "<=") == 0 ||
+             strcmp(node->op, ">") == 0 || strcmp(node->op, ">=") == 0) {
 
         const char* pred = "eq";
         const char* float_pred = "oeq";
@@ -7200,91 +7957,429 @@ case NODE_BINARY_OP: {
         else if (strcmp(node->op, "==") == 0) { pred = "eq"; float_pred = "oeq"; }
         else if (strcmp(node->op, "!=") == 0) { pred = "ne"; float_pred = "one"; }
 
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
+        if (is_float_op) {
             emit_llvm_ir("  %s = fcmp %s %s %s, %s", result, float_pred, result_type, converted_left, converted_right);
         } else {
             emit_llvm_ir("  %s = icmp %s %s %s, %s", result, pred, result_type, converted_left, converted_right);
         }
-
-        // return marked boolean
-        size_t len = strlen(result) + 2;
-        char* marked = malloc(len + 1);
-        marked[0] = '!';
-        strcpy(marked + 1, result);
-
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        free(result);
-        return marked;
     }
 
-    // Arithmetic ops
-    if (strcmp(node->op, "+") == 0) {
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
-            emit_llvm_ir("  %s = fadd %s %s, %s", result, result_type, converted_left, converted_right);
+    // ========== LOGICAL OPERATORS ==========
+    else if (strcmp(node->op, "&&") == 0) {
+        // Convert both operands to i1 if needed, then AND them
+        char* left_bool = generate_temp();
+        char* right_bool = generate_temp();
+        
+        if (strcmp(result_type, "i1") == 0) {
+            // Already booleans
+            left_bool = converted_left;
+            right_bool = converted_right;
         } else {
-            emit_llvm_ir("  %s = add nsw %s %s, %s", result, result_type, converted_left, converted_right);
+            // Convert to boolean (compare with zero)
+            if (is_float_op) {
+                emit_llvm_ir("  %s = fcmp one %s %s, 0.0", left_bool, result_type, converted_left);
+                emit_llvm_ir("  %s = fcmp one %s %s, 0.0", right_bool, result_type, converted_right);
+            } else {
+                emit_llvm_ir("  %s = icmp ne %s %s, 0", left_bool, result_type, converted_left);
+                emit_llvm_ir("  %s = icmp ne %s %s, 0", right_bool, result_type, converted_right);
+            }
         }
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        return result;
-    } else if (strcmp(node->op, "*") == 0) {
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
-            emit_llvm_ir("  %s = fmul %s %s, %s", result, result_type, converted_left, converted_right);
+        
+        emit_llvm_ir("  %s = and i1 %s, %s", result, left_bool, right_bool);
+        
+        if (left_bool != converted_left) free(left_bool);
+        if (right_bool != converted_right) free(right_bool);
+    }
+    else if (strcmp(node->op, "||") == 0) {
+        // Convert both operands to i1 if needed, then OR them
+        char* left_bool = generate_temp();
+        char* right_bool = generate_temp();
+        
+        if (strcmp(result_type, "i1") == 0) {
+            // Already booleans
+            left_bool = converted_left;
+            right_bool = converted_right;
         } else {
-            emit_llvm_ir("  %s = mul %s %s, %s", result, result_type, converted_left, converted_right);
+            // Convert to boolean (compare with zero)
+            if (is_float_op) {
+                emit_llvm_ir("  %s = fcmp one %s %s, 0.0", left_bool, result_type, converted_left);
+                emit_llvm_ir("  %s = fcmp one %s %s, 0.0", right_bool, result_type, converted_right);
+            } else {
+                emit_llvm_ir("  %s = icmp ne %s %s, 0", left_bool, result_type, converted_left);
+                emit_llvm_ir("  %s = icmp ne %s %s, 0", right_bool, result_type, converted_right);
+            }
         }
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        return result;
-    } else if (strcmp(node->op, "-") == 0) {
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
-            emit_llvm_ir("  %s = fsub %s %s, %s", result, result_type, converted_left, converted_right);
-        } else {
-            emit_llvm_ir("  %s = sub nsw %s %s, %s", result, result_type, converted_left, converted_right);
-        }
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        return result;
-    } else if (strcmp(node->op, "/") == 0) {
-        if (strcmp(result_type, "float") == 0 || strcmp(result_type, "double") == 0) {
-            emit_llvm_ir("  %s = fdiv %s %s, %s", result, result_type, converted_left, converted_right);
-        } else {
-            emit_llvm_ir("  %s = sdiv %s %s, %s", result, result_type, converted_left, converted_right);
-        }
-        if (left_raw) free(left_raw);
-        if (right_raw) free(right_raw);
-        free(left_val);
-        free(right_val);
-        if (converted_left != left_val) free(converted_left);
-        if (converted_right != right_val) free(converted_right);
-        return result;
+        
+        emit_llvm_ir("  %s = or i1 %s, %s", result, left_bool, right_bool);
+        
+        if (left_bool != converted_left) free(left_bool);
+        if (right_bool != converted_right) free(right_bool);
     }
 
-    // fallback
+    // ========== ASSIGNMENT OPERATORS ==========
+    else if (strcmp(node->op, "=") == 0) {
+        // Simple assignment - store right value to left address
+        emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, converted_right, result_type, converted_left, get_alignment_str(left_base_type));
+        // Return the assigned value
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "+=") == 0) {
+        if (is_float_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = fadd %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        } else {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = add nsw %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        }
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "-=") == 0) {
+        if (is_float_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = fsub %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        } else {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = sub nsw %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        }
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "*=") == 0) {
+        if (is_float_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = fmul %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        } else {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = mul nsw %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        }
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "/=") == 0) {
+        if (is_float_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = fdiv %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        } else {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = sdiv %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        }
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "%=") == 0) {
+        if (is_float_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = frem %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        } else {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = srem %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+        }
+        emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+    }
+    else if (strcmp(node->op, "&=") == 0) {
+        if (is_integer_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = and %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+            emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise AND assignment on non-integer type");
+            emit_llvm_ir("  %s = add i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "|=") == 0) {
+        if (is_integer_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = or %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+            emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise OR assignment on non-integer type");
+            emit_llvm_ir("  %s = add i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "^=") == 0) {
+        if (is_integer_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = xor %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+            emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+        } else {
+            emit_llvm_ir("  ; ERROR: Bitwise XOR assignment on non-integer type");
+            emit_llvm_ir("  %s = add i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, "<<=") == 0) {
+        if (is_integer_op) {
+            char* new_val = generate_temp();
+            emit_llvm_ir("  %s = shl %s %s, %s", new_val, result_type, converted_left, converted_right);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+            emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+        } else {
+            emit_llvm_ir("  ; ERROR: Left shift assignment on non-integer type");
+            emit_llvm_ir("  %s = add i32 0, 0", result);
+        }
+    }
+    else if (strcmp(node->op, ">>=") == 0) {
+        if (is_integer_op) {
+            char* new_val = generate_temp();
+            if (node->left->datatype && strstr(node->left->datatype, "unsigned") != NULL) {
+                emit_llvm_ir("  %s = lshr %s %s, %s", new_val, result_type, converted_left, converted_right);
+            } else {
+                emit_llvm_ir("  %s = ashr %s %s, %s", new_val, result_type, converted_left, converted_right);
+            }
+            emit_llvm_ir("  store %s %s, %s* %s, %s", result_type, new_val, result_type, converted_left, get_alignment_str(left_base_type));
+            free(new_val);
+            emit_llvm_ir("  %s = load %s, %s* %s, %s", result, result_type, result_type, converted_left, get_alignment_str(left_base_type));
+        } else {
+            emit_llvm_ir("  ; ERROR: Right shift assignment on non-integer type");
+            emit_llvm_ir("  %s = add i32 0, 0", result);
+        }
+    }
+
+    // ========== COMMA OPERATOR ==========
+    else if (strcmp(node->op, ",") == 0) {
+        // Comma operator: evaluate left, then right, return right
+        emit_llvm_ir("  ; Comma operator - evaluating left then right");
+        if (strcmp(result_type, "i1") == 0 && converted_right[0] != '!') {
+            char* cmp_temp = generate_temp();
+            emit_llvm_ir("  %s = icmp ne %s %s, 0", cmp_temp, result_type, converted_right);
+            emit_llvm_ir("  %s = add i1 0, %s", result, cmp_temp);
+            free(cmp_temp);
+        } else {
+            emit_llvm_ir("  %s = add %s 0, %s", result, result_type, converted_right);
+        }
+    }
+
+    // ========== UNSUPPORTED OPERATOR ==========
+    else {
+        emit_llvm_ir("  ; ERROR: Unsupported binary operator '%s'", node->op);
+        emit_llvm_ir("  %s = add %s 0, 0", result, result_type);
+    }
+
+cleanup:
     if (left_raw) free(left_raw);
     if (right_raw) free(right_raw);
-    free(left_val);
-    free(right_val);
+    if (left_val && left_val != converted_left) free(left_val);
+    if (right_val && right_val != converted_right) free(right_val);
     if (converted_left != left_val) free(converted_left);
     if (converted_right != right_val) free(converted_right);
-    return result;
+    if (left_base_type) free(left_base_type);
+    if (right_base_type) free(right_base_type);
+    return strdup(result);
+}
+
+case NODE_TERNARY_OP: {
+    // Ternary operator: condition ? true_expr : false_expr
+    // Structure: child = condition, left = true_expr, right = false_expr
+    
+    ASTNode* condition_node = node->child;
+    ASTNode* true_node = node->left;
+    ASTNode* false_node = node->right;
+    
+    // Validate we have all three components
+    if (!condition_node || !true_node || !false_node) {
+        printf("Error: Invalid ternary operator structure - missing components\n");
+        return NULL;
+    }
+    
+    printf("Ternary components: condition=%s, true=%s, false=%s\n",
+           node_type_to_string(condition_node->type),
+           node_type_to_string(true_node->type), 
+           node_type_to_string(false_node->type));
+    
+    // Generate IR for all three components
+    char* condition_val = generate_llvm_ir_from_ast(condition_node);
+    char* true_val = generate_llvm_ir_from_ast(true_node);
+    char* false_val = generate_llvm_ir_from_ast(false_node);
+
+    printf("condition value : %s \n",condition_val);
+    
+    if (!condition_val || !true_val || !false_val) {
+        if (condition_val) free(condition_val);
+        if (true_val) free(true_val);
+        if (false_val) free(false_val);
+        return NULL;
+    }
+    
+    // Get types for type conversion
+    char* result_type = get_complete_llvm_type(node);
+    char* condition_type = get_complete_llvm_type(condition_node);
+    char* true_type = get_complete_llvm_type(true_node);
+    char* false_type = get_complete_llvm_type(false_node);
+    
+    printf("Ternary types - condition: %s, true: %s, false: %s, result: %s\n", 
+           condition_type, true_type, false_type, result_type);
+    
+    // Step 1: Convert condition to i1 (boolean)
+    char* condition_bool = condition_val;
+    
+    if (strcmp(condition_type, "i1") != 0) {
+        condition_bool = generate_temp();
+        if (strcmp(condition_type, "float") == 0 || strcmp(condition_type, "double") == 0) {
+            // Floating point: compare with 0.0
+            emit_llvm_ir("  %s = fcmp one %s %s, 0.0", condition_bool, condition_type, condition_val);
+        } else {
+            // Integer types: compare with 0
+            emit_llvm_ir("  %s = icmp ne %s %s, 0", condition_bool, condition_type, condition_val);
+        }
+    }
+    
+    // Step 2: Handle type conversions for true and false expressions
+    char* converted_true = true_val;
+    char* converted_false = false_val;
+    
+    // Convert true expression to result type if needed
+    if (strcmp(true_type, result_type) != 0) {
+        converted_true = generate_temp();
+        
+        // Integer to floating point
+        if ((strcmp(result_type, "double") == 0) && 
+            (strcmp(true_type, "i32") == 0 || strcmp(true_type, "i64") == 0 || 
+             strcmp(true_type, "i16") == 0 || strcmp(true_type, "i8") == 0)) {
+            emit_llvm_ir("  %s = sitofp %s %s to double", converted_true, true_type, true_val);
+        }
+        else if ((strcmp(result_type, "float") == 0) && 
+                (strcmp(true_type, "i32") == 0 || strcmp(true_type, "i64") == 0 || 
+                 strcmp(true_type, "i16") == 0 || strcmp(true_type, "i8") == 0)) {
+            emit_llvm_ir("  %s = sitofp %s %s to float", converted_true, true_type, true_val);
+        }
+        // Floating point to floating point
+        else if ((strcmp(result_type, "double") == 0) && (strcmp(true_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fpext float %s to double", converted_true, true_val);
+        }
+        else if ((strcmp(result_type, "float") == 0) && (strcmp(true_type, "double") == 0)) {
+            emit_llvm_ir("  %s = fptrunc double %s to float", converted_true, true_val);
+        }
+        // Floating point to integer
+        else if ((strcmp(result_type, "i32") == 0) && (strcmp(true_type, "double") == 0 || strcmp(true_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fptosi %s %s to i32", converted_true, true_type, true_val);
+        }
+        else if ((strcmp(result_type, "i64") == 0) && (strcmp(true_type, "double") == 0 || strcmp(true_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fptosi %s %s to i64", converted_true, true_type, true_val);
+        }
+        // Integer to integer (different sizes)
+        else if (strcmp(result_type, "i32") == 0 && strcmp(true_type, "i64") == 0) {
+            emit_llvm_ir("  %s = trunc i64 %s to i32", converted_true, true_val);
+        }
+        else if (strcmp(result_type, "i64") == 0 && strcmp(true_type, "i32") == 0) {
+            emit_llvm_ir("  %s = sext i32 %s to i64", converted_true, true_val);
+        }
+        else if (strcmp(result_type, "i32") == 0 && strcmp(true_type, "i16") == 0) {
+            emit_llvm_ir("  %s = sext i16 %s to i32", converted_true, true_val);
+        }
+        else if (strcmp(result_type, "i32") == 0 && strcmp(true_type, "i8") == 0) {
+            emit_llvm_ir("  %s = sext i8 %s to i32", converted_true, true_val);
+        }
+        // Boolean to integer
+        else if ((strcmp(result_type, "i32") == 0 || strcmp(result_type, "i64") == 0) && 
+                 true_val[0] == '!') {
+            emit_llvm_ir("  %s = zext i1 %s to %s", converted_true, true_val + 1, result_type);
+        }
+        else {
+            // No conversion possible or needed
+            converted_true = true_val;
+        }
+    }
+    
+    // Convert false expression to result type if needed
+    if (strcmp(false_type, result_type) != 0) {
+        converted_false = generate_temp();
+        
+        // Integer to floating point
+        if ((strcmp(result_type, "double") == 0) && 
+            (strcmp(false_type, "i32") == 0 || strcmp(false_type, "i64") == 0 || 
+             strcmp(false_type, "i16") == 0 || strcmp(false_type, "i8") == 0)) {
+            emit_llvm_ir("  %s = sitofp %s %s to double", converted_false, false_type, false_val);
+        }
+        else if ((strcmp(result_type, "float") == 0) && 
+                (strcmp(false_type, "i32") == 0 || strcmp(false_type, "i64") == 0 || 
+                 strcmp(false_type, "i16") == 0 || strcmp(false_type, "i8") == 0)) {
+            emit_llvm_ir("  %s = sitofp %s %s to float", converted_false, false_type, false_val);
+        }
+        // Floating point to floating point
+        else if ((strcmp(result_type, "double") == 0) && (strcmp(false_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fpext float %s to double", converted_false, false_val);
+        }
+        else if ((strcmp(result_type, "float") == 0) && (strcmp(false_type, "double") == 0)) {
+            emit_llvm_ir("  %s = fptrunc double %s to float", converted_false, false_val);
+        }
+        // Floating point to integer
+        else if ((strcmp(result_type, "i32") == 0) && (strcmp(false_type, "double") == 0 || strcmp(false_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fptosi %s %s to i32", converted_false, false_type, false_val);
+        }
+        else if ((strcmp(result_type, "i64") == 0) && (strcmp(false_type, "double") == 0 || strcmp(false_type, "float") == 0)) {
+            emit_llvm_ir("  %s = fptosi %s %s to i64", converted_false, false_type, false_val);
+        }
+        // Integer to integer (different sizes)
+        else if (strcmp(result_type, "i32") == 0 && strcmp(false_type, "i64") == 0) {
+            emit_llvm_ir("  %s = trunc i64 %s to i32", converted_false, false_val);
+        }
+        else if (strcmp(result_type, "i64") == 0 && strcmp(false_type, "i32") == 0) {
+            emit_llvm_ir("  %s = sext i32 %s to i64", converted_false, false_val);
+        }
+        else if (strcmp(result_type, "i32") == 0 && strcmp(false_type, "i16") == 0) {
+            emit_llvm_ir("  %s = sext i16 %s to i32", converted_false, false_val);
+        }
+        else if (strcmp(result_type, "i32") == 0 && strcmp(false_type, "i8") == 0) {
+            emit_llvm_ir("  %s = sext i8 %s to i32", converted_false, false_val);
+        }
+        // Boolean to integer
+        else if ((strcmp(result_type, "i32") == 0 || strcmp(result_type, "i64") == 0) && 
+                 false_val[0] == '!') {
+            emit_llvm_ir("  %s = zext i1 %s to %s", converted_false, false_val + 1, result_type);
+        }
+        else {
+            // No conversion possible or needed
+            converted_false = false_val;
+        }
+    }
+    
+    // Step 3: Generate the select instruction
+    char* result = generate_temp();
+    emit_llvm_ir("  %s = select i1 %s, %s %s, %s %s", 
+                 result, condition_bool, result_type, converted_true, result_type, converted_false);
+    
+    // Step 4: Cleanup - only free what we allocated
+    if (condition_bool != condition_val) {
+        free(condition_bool);
+    }
+    free(condition_val);
+    
+    if (converted_true != true_val) {
+        free(converted_true);
+    } else {
+        free(true_val);
+    }
+    
+    if (converted_false != false_val) {
+        free(converted_false);
+    } else {
+        free(false_val);
+    }
+    
+    return strdup(result);
 }
 
 case NODE_ASSIGNMENT: {
@@ -7294,10 +8389,16 @@ case NODE_ASSIGNMENT: {
     // Handle array element assignment: arr[i] = value
     // Handle multi-dimensional array element assignment: arr[i][j] = value
     if (node->left && node->left->type == NODE_INDEX) {
+
         ASTNode* current = node->left;
         ASTNode* base_array = NULL;
         char* array_name = NULL;
         SymbolEntry* symbol = NULL;
+        char* llvm_type=get_complete_llvm_type(node);
+        char * base_llvm_type=strdup(llvm_type);
+
+        if(node->is_array)
+       base_llvm_type=get_llvm_base_type(node->datatype);
 
         // Collect all indices in reverse order (from outermost to innermost)
         ASTNode* indices[10]; // max 10 dimensions
@@ -7339,13 +8440,16 @@ case NODE_ASSIGNMENT: {
         }
 
         char* array_type = get_complete_llvm_type(base_array);
+        
         char* element_ptr = generate_temp();
 
         // Build GEP instruction with all indices
         if (symbol->is_static) {
             // Global array
             char* load_temp = generate_temp();
-            emit_llvm_ir("  %s = load %s, %s* @%s, align 4", load_temp, array_type, array_type, array_name);
+            
+
+            emit_llvm_ir("  %s = load %s, %s* @%s, %s", load_temp, array_type, array_type, array_name,get_alignment_str(base_llvm_type));
 
             // Build GEP with all indices
             char gep_str[512] = "";
@@ -7381,8 +8485,9 @@ case NODE_ASSIGNMENT: {
             emit_llvm_ir("  %s = zext i1 %s to i32", store_value, value_val + 1);
             free(value_val);
         }
+        
 
-        emit_llvm_ir("  store i32 %s, i32* %s, align 4", store_value, element_ptr);
+        emit_llvm_ir("  store i32 %s, i32* %s, %s", store_value, element_ptr,get_alignment_str(base_llvm_type));
 
         if (store_value != value_val) free(store_value);
         free(element_ptr);
@@ -7397,6 +8502,11 @@ case NODE_ASSIGNMENT: {
         node->left->op && strcmp(node->left->op, "*") == 0) {
         ASTNode* ptr_node = node->left->child;
         ASTNode* value_node = node->right;
+        char* llvm_type=get_complete_llvm_type(node);
+        char * base_llvm_type=strdup(llvm_type);
+
+            if(node->is_array)
+            base_llvm_type=get_llvm_base_type(node->datatype);
 
         if (!ptr_node || !value_node) return NULL;
 
@@ -7412,17 +8522,17 @@ case NODE_ASSIGNMENT: {
         // Get the pointer base type
         char* base_type = "i32"; // Default
         if (ptr_node->datatype) {
-            base_type = get_llvm_type_from_semantic_for_type(ptr_node->datatype);
+            base_type = get_complete_llvm_type(ptr_node);
         }
 
         // Handle value storage through pointer
         if (value_val[0] == '!') {
             char* zext_temp = generate_temp();
             emit_llvm_ir("  %s = zext i1 %s to %s", zext_temp, value_val + 1, base_type);
-            emit_llvm_ir("  store %s %s, %s* %s, align 4", base_type, zext_temp, base_type, ptr_val);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", base_type, zext_temp, base_type, ptr_val,get_alignment_str(base_llvm_type));
             free(zext_temp);
         } else {
-            emit_llvm_ir("  store %s %s, %s* %s, align 4", base_type, value_val, base_type, ptr_val);
+            emit_llvm_ir("  store %s %s, %s* %s, %s", base_type, value_val, base_type, ptr_val,get_alignment_str(base_llvm_type));
         }
 
         free(ptr_val);
@@ -7439,9 +8549,9 @@ case NODE_ASSIGNMENT: {
             char* string_value = generate_llvm_ir_from_ast(node->right);
 
             if (symbol->is_static) {
-                emit_llvm_ir("  store i8* %s, i8** @%s", string_value, node->left->value);
+                emit_llvm_ir("  store i8* %s, i8** @%s, align 8", string_value, node->left->value);
             } else {
-                emit_llvm_ir("  store i8* %s, i8** %%%s", string_value, node->left->value);
+                emit_llvm_ir("  store i8* %s, i8** %%%s, align 8", string_value, node->left->value);
             }
 
             if (string_value) free(string_value);
@@ -7457,13 +8567,18 @@ case NODE_ASSIGNMENT: {
             if (!pointer_value) return NULL;
 
             char* pointer_type = get_complete_llvm_type(node->left);
+            char* base_llvm_type=strdup(pointer_type);
+
+            if(node->left->is_array){
+              base_llvm_type=get_llvm_base_type(node->left->datatype);
+            }
 
             if (symbol->is_static) {
                 // Global pointer
-                emit_llvm_ir("  store %s %s, %s* @%s", pointer_type, pointer_value, pointer_type, node->left->value);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", pointer_type, pointer_value, pointer_type, node->left->value,get_alignment_str(base_llvm_type));
             } else {
                 // Local pointer
-                emit_llvm_ir("  store %s %s, %s* %%%s", pointer_type, pointer_value, pointer_type, node->left->value);
+                emit_llvm_ir("  store %s %s, %s* %%%s, %s", pointer_type, pointer_value, pointer_type, node->left->value,get_alignment_str(base_llvm_type));
             }
 
             free(pointer_value);
@@ -7479,7 +8594,13 @@ case NODE_ASSIGNMENT: {
             sprintf(mangled_name, "%s.%s", current_function, node->left->value);
 
             char* var_type = get_complete_llvm_type(node->left);
+            char * base_llvm_type=strdup(var_type);
+
+            if(node->is_array)
+            base_llvm_type=get_llvm_base_type(node->datatype);
+
             char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
+
 
             // Handle compound assignment operators for local static variables
             if (node->op && strcmp(node->op, "=") != 0) {
@@ -7487,7 +8608,7 @@ case NODE_ASSIGNMENT: {
 
                 /* Load current value with alignment */
                 char* cur = generate_temp();
-                emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, mangled_name);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", cur, var_type, var_type, mangled_name,get_alignment_str(base_llvm_type));
 
                 /* Ensure RHS is correct type: if RHS is a marked i1, zext it to var_type */
                 char* rhs = NULL;
@@ -7549,10 +8670,10 @@ case NODE_ASSIGNMENT: {
                     if (rhs[0] == '!') {
                         char* zext_tmp = generate_temp();
                         emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, rhs + 1, var_type);
-                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, mangled_name);
+                        emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, mangled_name,get_alignment_str(base_llvm_type));
                         free(zext_tmp);
                     } else {
-                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, rhs, var_type, mangled_name);
+                        emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, rhs, var_type, mangled_name,get_alignment_str(base_llvm_type));
                     }
                     free(cur);
                     if (rhs != right_value) free(rhs);
@@ -7560,7 +8681,7 @@ case NODE_ASSIGNMENT: {
                 }
 
                 /* Store back with alignment */
-                emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, mangled_name);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, res, var_type, mangled_name,get_alignment_str(base_llvm_type));
 
                 /* free temps */
                 free(cur);
@@ -7575,16 +8696,16 @@ case NODE_ASSIGNMENT: {
                 if (right_value[0] == '!') {
                     char* zext_tmp = generate_temp();
                     emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, mangled_name);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, mangled_name,get_alignment_str(base_llvm_type));
                     free(zext_tmp);
                     free(right_value);
                 } else {
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, mangled_name);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, right_value, var_type, mangled_name,get_alignment_str(base_llvm_type));
                     free(right_value);
                 }
             } else {
                 /* no rhs -> store 0 */
-                emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, mangled_name);
+                emit_llvm_ir("  store %s 0, %s* @%s, %s", var_type, var_type, mangled_name,get_alignment_str(base_llvm_type));
             }
             return NULL;
         }
@@ -7596,6 +8717,10 @@ case NODE_ASSIGNMENT: {
         if (symbol && symbol->is_static && strcmp(current_function, "") == 0) {
             char* var_type = get_complete_llvm_type(node->left);
             char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
+            char * base_llvm_type=strdup(var_type);
+
+            if(node->is_array)
+            base_llvm_type=get_llvm_base_type(node->datatype);
 
             // Handle compound assignment operators for global static variables
             if (node->op && strcmp(node->op, "=") != 0) {
@@ -7603,7 +8728,7 @@ case NODE_ASSIGNMENT: {
 
                 /* Load current value with alignment */
                 char* cur = generate_temp();
-                emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, node->left->value);
+                emit_llvm_ir("  %s = load %s, %s* @%s, %s", cur, var_type, var_type, node->left->value,get_alignment_str(base_llvm_type));
 
                 /* Ensure RHS is correct type: if RHS is a marked i1, zext it to var_type */
                 char* rhs = NULL;
@@ -7665,10 +8790,10 @@ case NODE_ASSIGNMENT: {
                     if (rhs[0] == '!') {
                         char* zext_tmp = generate_temp();
                         emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, rhs + 1, var_type);
-                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, node->left->value);
+                        emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, node->left->value,get_alignment_str(base_llvm_type));
                         free(zext_tmp);
                     } else {
-                        emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, rhs, var_type, node->left->value);
+                        emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, rhs, var_type, node->left->value,get_alignment_str(base_llvm_type));
                     }
                     free(cur);
                     if (rhs != right_value) free(rhs);
@@ -7676,7 +8801,7 @@ case NODE_ASSIGNMENT: {
                 }
 
                 /* Store back with alignment */
-                emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, node->left->value);
+                emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, res, var_type, node->left->value,get_alignment_str(base_llvm_type));
 
                 /* free temps */
                 free(cur);
@@ -7691,16 +8816,16 @@ case NODE_ASSIGNMENT: {
                 if (right_value[0] == '!') {
                     char* zext_tmp = generate_temp();
                     emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, node->left->value);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, node->left->value,get_alignment_str(base_llvm_type));
                     free(zext_tmp);
                     free(right_value);
                 } else {
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, node->left->value);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, right_value, var_type, node->left->value,get_alignment_str(base_llvm_type));
                     free(right_value);
                 }
             } else {
                 /* no rhs -> store 0 */
-                emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, node->left->value);
+                emit_llvm_ir("  store %s 0, %s* @%s, %s", var_type, var_type, node->left->value,get_alignment_str(base_llvm_type) );
             }
             return NULL;
         }
@@ -7713,6 +8838,9 @@ case NODE_ASSIGNMENT: {
         SymbolEntry* symbol = find_symbol(var_name);
         int is_static = symbol ? symbol->is_static : 0;
         char* var_type = get_complete_llvm_type(node->left);
+        char * base_llvm_type=strdup(var_type);
+        if(node->is_array)
+        base_llvm_type=get_llvm_base_type(node->datatype);
 
         /* Generate RHS */
         char* right_value = node->right ? generate_llvm_ir_from_ast(node->right) : NULL;
@@ -7728,26 +8856,26 @@ case NODE_ASSIGNMENT: {
                         char* zext_tmp = generate_temp();
                         emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
                         if (is_static) {
-                            emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, var_name,get_alignment_str(base_llvm_type));
                         } else {
-                            emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, zext_tmp, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, zext_tmp, var_type, var_name,get_alignment_str(base_llvm_type));
                         }
                         free(zext_tmp);
                         free(right_value);
                     } else {
                         if (is_static) {
-                            emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, right_value, var_type, var_name,get_alignment_str(base_llvm_type));
                         } else {
-                            emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, right_value, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, right_value, var_type, var_name,get_alignment_str(base_llvm_type));
                         }
                         free(right_value);
                     }
                 } else {
                     /* no rhs -> store 0 */
                     if (is_static) {
-                        emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, var_name);
+                        emit_llvm_ir("  store %s 0, %s* @%s, %s", var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                     } else {
-                        emit_llvm_ir("  store %s 0, %s* %%%s, align 4", var_type, var_type, var_name);
+                        emit_llvm_ir("  store %s 0, %s* %%%s, %s", var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                     }
                 }
             } else if (strcmp(node->op, "+=") == 0 || strcmp(node->op, "-=") == 0 ||
@@ -7759,9 +8887,9 @@ case NODE_ASSIGNMENT: {
                 /* Load current value with alignment */
                 char* cur = generate_temp();
                 if (is_static) {
-                    emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, var_name);
+                    emit_llvm_ir("  %s = load %s, %s* @%s, %s", cur, var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                 } else {
-                    emit_llvm_ir("  %s = load %s, %s* %%%s, align 4", cur, var_type, var_type, var_name);
+                    emit_llvm_ir("  %s = load %s, %s* %%%s, %s", cur, var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                 }
 
                 /* Ensure RHS is correct type: if RHS is a marked i1, zext it to var_type */
@@ -7812,9 +8940,9 @@ case NODE_ASSIGNMENT: {
 
                 /* Store back with alignment */
                 if (is_static) {
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, var_name);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, res, var_type, var_name,get_alignment_str(base_llvm_type));
                 } else {
-                    emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, res, var_type, var_name);
+                    emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, res, var_type, var_name,get_alignment_str(base_llvm_type));
                 }
 
                 /* free temps */
@@ -7828,9 +8956,9 @@ case NODE_ASSIGNMENT: {
                 /* Bitwise compound assignment (integer types only) */
                 char* cur = generate_temp();
                 if (is_static) {
-                    emit_llvm_ir("  %s = load %s, %s* @%s, align 4", cur, var_type, var_type, var_name);
+                    emit_llvm_ir("  %s = load %s, %s* @%s, %s", cur, var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                 } else {
-                    emit_llvm_ir("  %s = load %s, %s* %%%s, align 4", cur, var_type, var_type, var_name);
+                    emit_llvm_ir("  %s = load %s, %s* %%%s, %s", cur, var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                 }
 
                 char* rhs = NULL;
@@ -7858,9 +8986,9 @@ case NODE_ASSIGNMENT: {
                 }
 
                 if (is_static) {
-                    emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, res, var_type, var_name);
+                    emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, res, var_type, var_name,get_alignment_str(base_llvm_type));
                 } else {
-                    emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, res, var_type, var_name);
+                    emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, res, var_type, var_name,get_alignment_str(base_llvm_type));
                 }
 
                 free(cur);
@@ -7874,25 +9002,25 @@ case NODE_ASSIGNMENT: {
                         char* zext_tmp = generate_temp();
                         emit_llvm_ir("  %s = zext i1 %s to %s", zext_tmp, right_value + 1, var_type);
                         if (is_static) {
-                            emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, zext_tmp, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, zext_tmp, var_type, var_name,get_alignment_str(base_llvm_type));
                         } else {
-                            emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, zext_tmp, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, zext_tmp, var_type, var_name,get_alignment_str(base_llvm_type));
                         }
                         free(zext_tmp);
                         free(right_value);
                     } else {
                         if (is_static) {
-                            emit_llvm_ir("  store %s %s, %s* @%s, align 4", var_type, right_value, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* @%s, %s", var_type, right_value, var_type, var_name,get_alignment_str(base_llvm_type));
                         } else {
-                            emit_llvm_ir("  store %s %s, %s* %%%s, align 4", var_type, right_value, var_type, var_name);
+                            emit_llvm_ir("  store %s %s, %s* %%%s, %s", var_type, right_value, var_type, var_name,get_alignment_str(base_llvm_type));
                         }
                         free(right_value);
                     }
                 } else {
                     if (is_static) {
-                        emit_llvm_ir("  store %s 0, %s* @%s, align 4", var_type, var_type, var_name);
+                        emit_llvm_ir("  store %s 0, %s* @%s, %s", var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                     } else {
-                        emit_llvm_ir("  store %s 0, %s* %%%s, align 4", var_type, var_type, var_name);
+                        emit_llvm_ir("  store %s 0, %s* %%%s, %s", var_type, var_type, var_name,get_alignment_str(base_llvm_type));
                     }
                 }
             }
@@ -8066,15 +9194,21 @@ case NODE_FUNCTION_DEF: {
             if (param->datatype) {
                 param_type = get_complete_llvm_type(param); // Use complete type for pointers
             }
+            char * base_llvm_type=strdup(param_type);
+
+            if(param->is_array){
+                base_llvm_type=get_llvm_base_type(param->datatype);
+            }
 
             if (param_name) {
                 // POINTER FIX: Handle pointer parameters specifically
                 if (param->is_pointer) {
                     // For pointer parameters, we need to allocate space for the pointer itself
                     char* complete_param_type = get_complete_llvm_type(param);
-                    emit_llvm_ir("  %%%s.addr = alloca %s, align 4", param_name, complete_param_type);
-                    emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, align 4",
-                                complete_param_type, param_name, complete_param_type, param_name);
+                    
+                    emit_llvm_ir("  %%%s.addr = alloca %s, %s", param_name, complete_param_type,get_alignment_str(base_llvm_type));
+                    emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, %s",
+                                complete_param_type, param_name, complete_param_type, param_name,get_alignment_str(base_llvm_type));
                 }
                 // Handle string parameters
                 else if (strcmp(param->datatype, "string") == 0 || strcmp(param->datatype, "char*") == 0) {
@@ -8082,8 +9216,8 @@ case NODE_FUNCTION_DEF: {
                     emit_llvm_ir("  store i8* %%%s, i8** %%%s.addr, align 8", param_name, param_name);
                 } else {
                     // Regular non-pointer parameters
-                    emit_llvm_ir("  %%%s.addr = alloca %s, align 4", param_name, param_type);
-                    emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, align 4", param_type, param_name, param_type, param_name);
+                    emit_llvm_ir("  %%%s.addr = alloca %s, %s", param_name, param_type,get_alignment_str(base_llvm_type));
+                    emit_llvm_ir("  store %s %%%s, %s* %%%s.addr, %s", param_type, param_name, param_type, param_name,get_alignment_str(base_llvm_type));
                 }
             } else {
                 // Use positional parameter name
@@ -8093,12 +9227,12 @@ case NODE_FUNCTION_DEF: {
                 // POINTER FIX: Handle pointer parameters for positional arguments too
                 if (param->is_pointer) {
                     char* complete_param_type = get_complete_llvm_type(param);
-                    emit_llvm_ir("  %%arg%d.addr = alloca %s, align 4", param_index, complete_param_type);
-                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, align 4",
-                                complete_param_type, param_index, complete_param_type, param_index);
+                    emit_llvm_ir("  %%arg%d.addr = alloca %s, %s", param_index, complete_param_type,get_alignment_str(base_llvm_type));
+                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, %s",
+                                complete_param_type, param_index, complete_param_type, param_index,get_alignment_str(base_llvm_type));
                 } else {
-                    emit_llvm_ir("  %%arg%d.addr = alloca %s, align 4", param_index, param_type);
-                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, align 4", param_type, param_index, param_type, param_index);
+                    emit_llvm_ir("  %%arg%d.addr = alloca %s, %s", param_index, param_type,get_alignment_str(base_llvm_type));
+                    emit_llvm_ir("  store %s %%%d, %s* %%arg%d.addr, %s", param_type, param_index, param_type, param_index,get_alignment_str(base_llvm_type));
                 }
             }
             param_index++;
@@ -8314,6 +9448,7 @@ case NODE_STMT_LIST: {
 case NODE_CALL: {
     ASTNode* func_node = node->child;
     ASTNode* args_node = func_node ? func_node->next : NULL;
+    printf("call node : %s \n",func_node->value);
 
     // Lambda expression handling (keep existing)
     if (func_node->type == NODE_LAMBDA_EXPR) {
@@ -8365,7 +9500,7 @@ case NODE_CALL: {
         }
 
         free(lambda_ptr);
-        return result;
+        return strdup(result);
     }
 
     char* func_name = NULL;
@@ -8383,6 +9518,8 @@ case NODE_CALL: {
     FunctionInfo* func_info = find_function_info(func_name);
     char* return_type = func_info ? func_info->return_type : "i32";
 
+    printf("call function name : %s \n",func_name);
+
     // Handle string functions (keep existing)
     if (strcmp(func_name, "strlen") == 0) {
         char* result = generate_temp();
@@ -8396,7 +9533,7 @@ case NODE_CALL: {
             free(arg_val);
             return conv_result;
         }
-        return result;
+        return strdup(result);
     } else if (strcmp(func_name, "strcpy") == 0) {
         char* result = generate_temp();
         if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
@@ -8410,100 +9547,377 @@ case NODE_CALL: {
                 free(arg2_val);
             }
         }
-        return result;
+        return strdup(result);
     }
 
-    // ENHANCED: Comprehensive cin/cout handling
-    if (strcmp(func_name, "cout") == 0 || strcmp(func_name, "cin") == 0) {
-        char* result = generate_temp();
+else if (strcmp(func_name, "cout") == 0 || strcmp(func_name, "cin") == 0) {
+    char* result = generate_temp();
 
-        // Generate dynamic format string based on argument types
-        char* format_str = generate_format_string_for_arguments(args_node);
-        char* format_str_ptr = generate_temp();
+    // Generate dynamic format string based on argument types
+    char* format_str = generate_format_string_for_arguments(args_node);
+    char* format_str_ptr = generate_temp();
 
-        // Create the format string constant name
-        char* format_var_name = generate_format_string_name();
+    // Create the format string constant name
+    char* format_var_name = generate_format_string_name();
 
-        int format_len = strlen(format_str) + 3; // +3 for "\\0A\\00" (newline + null terminator for cout)
-        if (strcmp(func_name, "cout") == 0) {
-            // Add to string constants collection instead of emitting immediately
-            char format_content[1024];
-            sprintf(format_content, "%s\\0A", format_str);
-            add_string_constant(format_var_name, format_content, format_len);
-        } else {
-            // For cin, no newline needed
-            format_len = strlen(format_str) + 1; // +1 for null terminator
-            add_string_constant(format_var_name, format_str, format_len);
-        }
+    int format_len = strlen(format_str) + 3; // +3 for "\\0A\\00" (newline + null terminator for cout)
+    if (strcmp(func_name, "cout") == 0) {
+        // Add to string constants collection instead of emitting immediately
+        char format_content[1024];
+        sprintf(format_content, "%s\\0A", format_str);
+        add_string_constant(format_var_name, format_content, format_len);
+    } else {
+        // For cin, no newline needed
+        format_len = strlen(format_str) + 1; // +1 for null terminator
+        add_string_constant(format_var_name, format_str, format_len);
+    }
 
-        // Use the collected string constant
-        emit_llvm_ir("  %s = getelementptr inbounds [%d x i8], [%d x i8]* @%s, i32 0, i32 0",
-                     format_str_ptr, format_len, format_len, format_var_name);
+    // Use the collected string constant
+    emit_llvm_ir("  %s = getelementptr inbounds [%d x i8], [%d x i8]* @%s, i32 0, i32 0",
+                 format_str_ptr, format_len, format_len, format_var_name);
 
-        // Build comprehensive argument list
-        char final_args_str[2048] = "";
-        strcpy(final_args_str, "i8* ");
-        strcat(final_args_str, format_str_ptr);
+    // Build comprehensive argument list
+    char final_args_str[2048] = "";
+    strcpy(final_args_str, "i8* ");
+    strcat(final_args_str, format_str_ptr);
 
-        if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
-            ASTNode* arg = args_node->child;
-            int arg_index = 0;
+    if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
+        ASTNode* arg = args_node->child;
+        int arg_index = 0;
 
-            while (arg) {
-                strcat(final_args_str, ", ");
+        while (arg) {
+            strcat(final_args_str, ", ");
 
-                char* arg_type = get_complete_llvm_type(arg);
-                char* arg_val = generate_llvm_ir_from_ast(arg);
+            char* arg_type = get_complete_llvm_type(arg);
+            char* base_arg_type = get_llvm_base_type(arg->datatype);
 
-                if (arg_val) {
-                    // Handle string/pointer types
-                    char* array_ptr_val = handle_array_pointer_for_io(arg);
-                    if (array_ptr_val&&(strcmp(arg->datatype,"string")!=0)) {
-                        strcat(final_args_str, "i8* ");
-                        strcat(final_args_str,array_ptr_val);
-                        if (array_ptr_val != arg_val) free(array_ptr_val);
-                        free(arg_val);
+            // ========== CIN HANDLING ==========
+            if (strcmp(func_name, "cin") == 0) {
+                // Handle multi-dimensional array element access: arr[i][j]
+                if (arg->type == NODE_INDEX) {
+                    char* element_addr = generate_temp();
+                    
+                    // Get the base array and all indices
+                    ASTNode* current = arg;
+                    ASTNode* base_array = NULL;
+                    char* array_name = NULL;
+                    SymbolEntry* symbol = NULL;
+                    
+                    // Collect all indices in reverse order
+                    ASTNode* indices[10];
+                    int index_count = 0;
+                    
+                    // Traverse to find base array and collect indices
+                    while (current && current->type == NODE_INDEX) {
+                        indices[index_count++] = current;
+                        ASTNode* array_part = current->child;
+                        
+                        if (array_part && array_part->type == NODE_IDENTIFIER) {
+                            base_array = array_part;
+                            array_name = base_array->value;
+                            symbol = find_symbol(array_name);
+                            break;
+                        }
+                        current = array_part;
                     }
-
-                    else if(strcmp(arg->datatype,"string")==0){
-                        strcat(final_args_str, "i8* ");
-                        strcat(final_args_str,arg_val);
-                    }
-
-                    // Handle array element access
-                    else if (arg->type == NODE_INDEX) {
-                        char* element_val = handle_array_element_for_io(arg,strdup(arg_val));
-                        if (element_val) {
-                            strcat(final_args_str, arg_type);
-                            strcat(final_args_str, " ");
-                            strcat(final_args_str, element_val);
-                            free(element_val);
-                            free(arg_val);
+                    
+                    if (base_array && array_name && symbol) {
+                        char* array_type = get_complete_llvm_type(base_array);
+                        char* base_array_type = get_llvm_base_type(base_array->datatype);
+                        
+                        // Generate all index expressions
+                        char* index_values[10];
+                        int actual_index_count = 0;
+                        
+                        for (int i = index_count-1; i >= 0; i--) {
+                            ASTNode* index_node = indices[i]->child ? indices[i]->child->next : NULL;
+                            if (index_node) {
+                                index_values[actual_index_count++] = get_index_value(index_node);
+                            }
+                        }
+                        
+                        // Build GEP with all indices for multi-dimensional arrays
+                        if (symbol->is_static) {
+                            char* load_temp = generate_temp();
+                            emit_llvm_ir("  %s = load %s, %s* @%s, %s", load_temp, array_type, array_type, array_name, get_alignment_str(base_array_type));
+                            
+                            char gep_str[512] = "";
+                            strcpy(gep_str, "i32 0");
+                            for (int i = 0; i < actual_index_count; i++) {
+                                char temp[64];
+                                sprintf(temp, ", i32 %s", index_values[i]);
+                                strcat(gep_str, temp);
+                            }
+                            
+                            emit_llvm_ir("  %s = getelementptr inbounds %s, %s %s, %s", 
+                                        element_addr, array_type, array_type, load_temp, gep_str);
+                            free(load_temp);
                         } else {
+                            char gep_str[512] = "";
+                            strcpy(gep_str, "i32 0");
+                            for (int i = 0; i < actual_index_count; i++) {
+                                char temp[64];
+                                sprintf(temp, ", i32 %s", index_values[i]);
+                                strcat(gep_str, temp);
+                            }
+                            
+                            emit_llvm_ir("  %s = getelementptr inbounds %s, %s* %%%s, %s", 
+                                        element_addr, array_type, array_type, array_name, gep_str);
+                        }
+                        
+                        // Convert to i8* for cin
+                        char* bitcast_temp = generate_temp();
+                        emit_llvm_ir("  %s = bitcast %s* %s to i8*", bitcast_temp, base_array_type, element_addr);
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, bitcast_temp);
+                        
+                        // Free temporary values
+                        for (int i = 0; i < actual_index_count; i++) {
+                            if (index_values[i]) free(index_values[i]);
+                        }
+                        free(bitcast_temp);
+                        free(element_addr);
+                    } else {
+                        strcat(final_args_str, "i8* null");
+                    }
+                }
+                // Handle pointer dereference: *ptr
+                else if (arg->type == NODE_UNARY_OP && strcmp(arg->op, "*") == 0) {
+                    ASTNode* ptr_node = arg->child;
+                    char* ptr_val = generate_llvm_ir_from_ast(ptr_node);
+                    
+                    if (ptr_val) {
+                        // The pointer value IS the address we want for cin
+                        char* bitcast_temp = generate_temp();
+                        char* ptr_type = get_complete_llvm_type(ptr_node);
+                        char* base_type = get_llvm_pointer_base_type(ptr_type);
+                        emit_llvm_ir("  %s = bitcast %s %s to i8*", bitcast_temp, base_type, ptr_val);
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, bitcast_temp);
+                        
+                        free(ptr_val);
+                        free(bitcast_temp);
+                    } else {
+                        strcat(final_args_str, "i8* null");
+                    }
+                }
+                // Handle pointer-to-pointer: **ptr2
+                else if (arg->type == NODE_UNARY_OP && strcmp(arg->op, "*") == 0) {
+                    // Check if this is a double dereference
+                    ASTNode* inner_ptr = arg->child;
+                    if (inner_ptr && inner_ptr->type == NODE_UNARY_OP && strcmp(inner_ptr->op, "*") == 0) {
+                        ASTNode* ptr2_node = inner_ptr->child;
+                        char* ptr2_val = generate_llvm_ir_from_ast(ptr2_node);
+                        
+                        if (ptr2_val) {
+                            // Load the first pointer
+                            char* ptr1_temp = generate_temp();
+                            char* ptr2_type = get_complete_llvm_type(ptr2_node);
+                            char* ptr1_type = get_llvm_pointer_base_type(ptr2_type);
+                            emit_llvm_ir("  %s = load %s, %s %s, %s", ptr1_temp, ptr1_type, ptr2_type, ptr2_val, get_alignment_str(ptr1_type));
+                            
+                            // The loaded pointer is the address we want for cin
+                            char* bitcast_temp = generate_temp();
+                            char* base_type = get_llvm_pointer_base_type(ptr1_type);
+                            emit_llvm_ir("  %s = bitcast %s %s to i8*", bitcast_temp, base_type, ptr1_temp);
+                            strcat(final_args_str, "i8* ");
+                            strcat(final_args_str, bitcast_temp);
+                            
+                            free(ptr2_val);
+                            free(ptr1_temp);
+                            free(bitcast_temp);
+                        } else {
+                            strcat(final_args_str, "i8* null");
+                        }
+                    } else {
+                        // Single pointer dereference (handled above)
+                        strcat(final_args_str, "i8* null");
+                    }
+                }
+                // Handle complex expressions - create temporary storage
+                else if (arg->type != NODE_IDENTIFIER) {
+                    char* temp_ptr = generate_temp();
+                    char* arg_val = generate_llvm_ir_from_ast(arg);
+                    
+                    if (arg_val) {
+                        // Allocate temporary storage with alignment
+                        emit_llvm_ir("  %s = alloca %s, %s", temp_ptr, arg_type, get_alignment_str(base_arg_type));
+                        
+                        // Store initial value (optional) with alignment
+                        if (arg_val[0] == '!') {
+                            char* zext_temp = generate_temp();
+                            emit_llvm_ir("  %s = zext i1 %s to %s", zext_temp, arg_val + 1, arg_type);
+                            emit_llvm_ir("  store %s %s, %s* %s, %s", arg_type, zext_temp, arg_type, temp_ptr, get_alignment_str(base_arg_type));
+                            free(zext_temp);
+                        } else {
+                            emit_llvm_ir("  store %s %s, %s* %s, %s", arg_type, arg_val, arg_type, temp_ptr, get_alignment_str(base_arg_type));
+                        }
+                        
+                        // Get address as i8*
+                        char* addr_temp = generate_temp();
+                        emit_llvm_ir("  %s = bitcast %s* %s to i8*", addr_temp, arg_type, temp_ptr);
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, addr_temp);
+                        
+                        free(arg_val);
+                        free(addr_temp);
+                    } else {
+                        strcat(final_args_str, "i8* null");
+                    }
+                    free(temp_ptr);
+                }
+                // Handle regular identifiers
+                else {
+                    char* arg_val = generate_llvm_ir_from_ast(arg);
+                    
+                    if (arg_val) {
+                        SymbolEntry* symbol = find_symbol(arg->value);
+                        char* addr_temp = generate_temp();
+                        
+                        if (symbol && symbol->is_static) {
+                            emit_llvm_ir("  %s = bitcast %s* @%s to i8*", addr_temp, arg_type, arg->value);
+                        } else {
+                            if (arg->is_parameter) {
+                                emit_llvm_ir("  %s = bitcast %s* %%%s.addr to i8*", addr_temp, arg_type, arg->value);
+                            } else {
+                                emit_llvm_ir("  %s = bitcast %s* %%%s to i8*", addr_temp, arg_type, arg->value);
+                            }
+                        }
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, addr_temp);
+                        
+                        free(arg_val);
+                        free(addr_temp);
+                    } else {
+                        strcat(final_args_str, "i8* null");
+                    }
+                }
+            }
+            // ========== COUT HANDLING ==========
+            else {
+                char* arg_val = generate_llvm_ir_from_ast(arg);
+                
+                if (arg_val) {
+                    // Handle multi-dimensional array element access for cout: arr[i][j]
+                    if (arg->type == NODE_INDEX) {
+                        // For multi-dimensional arrays, we need to load the value
+                        char* loaded_val = generate_temp();
+                        
+                        // Get base array to determine type
+                        ASTNode* base_array = arg->child;
+                        while(base_array && base_array->type == NODE_INDEX) {
+                            base_array = base_array->child;
+                        }
+                        
+                        if (base_array && base_array->type == NODE_IDENTIFIER) {
+                            SymbolEntry* symbol = find_symbol(base_array->value);
+                            char* base_array_type = get_llvm_base_type(base_array->datatype);
+                            
+                            if (symbol && strcmp(symbol->datatype, "char") == 0) {
+                                // Character array element - promote to i32
+                                char* promoted = generate_temp();
+                                emit_llvm_ir("  %s = zext i8 %s to i32", promoted, arg_val);
+                                strcat(final_args_str, "i32 ");
+                                strcat(final_args_str, promoted);
+                                free(promoted);
+                            } else {
+                                // Regular array element - load with alignment
+                                emit_llvm_ir("  %s = load %s, %s* %s, %s", loaded_val, base_array_type, base_array_type, arg_val, get_alignment_str(base_array_type));
+                                strcat(final_args_str, base_array_type);
+                                strcat(final_args_str, " ");
+                                strcat(final_args_str, loaded_val);
+                                free(loaded_val);
+                            }
+                        } else {
+                            // Fallback - use the generated value directly
                             strcat(final_args_str, arg_type);
                             strcat(final_args_str, " ");
                             strcat(final_args_str, arg_val);
-                            free(arg_val);
                         }
+                        free(arg_val);
+                    }
+                    // Handle pointer dereference for cout: *ptr
+                    else if (arg->type == NODE_UNARY_OP && strcmp(arg->op, "*") == 0) {
+                        // For cout, we want the dereferenced VALUE
+                        char* loaded_val = generate_temp();
+                        char* ptr_type = get_complete_llvm_type(arg->child);
+                        char* base_type = get_llvm_pointer_base_type(ptr_type);
+                        emit_llvm_ir("  %s = load %s, %s %s, %s", loaded_val, base_type, ptr_type, arg_val, get_alignment_str(base_type));
+                        
+                        // Handle character pointers specially
+                        if (strcmp(base_type, "i8") == 0) {
+                            char* promoted = generate_temp();
+                            emit_llvm_ir("  %s = zext i8 %s to i32", promoted, loaded_val);
+                            strcat(final_args_str, "i32 ");
+                            strcat(final_args_str, promoted);
+                            free(promoted);
+                        } else {
+                            strcat(final_args_str, base_type);
+                            strcat(final_args_str, " ");
+                            strcat(final_args_str, loaded_val);
+                        }
+                        
+                        free(loaded_val);
+                        free(arg_val);
+                    }
+                    // Handle pointer-to-pointer dereference for cout: **ptr2
+                    else if (arg->type == NODE_UNARY_OP && strcmp(arg->op, "*") == 0) {
+                        // Check if this is a double dereference
+                        ASTNode* inner_ptr = arg->child;
+                        if (inner_ptr && inner_ptr->type == NODE_UNARY_OP && strcmp(inner_ptr->op, "*") == 0) {
+                            ASTNode* ptr2_node = inner_ptr->child;
+                            char* ptr2_val = generate_llvm_ir_from_ast(ptr2_node);
+                            
+                            if (ptr2_val) {
+                                // Load the first pointer
+                                char* ptr1_temp = generate_temp();
+                                char* ptr2_type = get_complete_llvm_type(ptr2_node);
+                                char* ptr1_type = get_llvm_pointer_base_type(ptr2_type);
+                                emit_llvm_ir("  %s = load %s, %s %s, %s", ptr1_temp, ptr1_type, ptr2_type, ptr2_val, get_alignment_str(ptr1_type));
+                                
+                                // Load the actual value
+                                char* loaded_val = generate_temp();
+                                char* base_type = get_llvm_pointer_base_type(ptr1_type);
+                                emit_llvm_ir("  %s = load %s, %s %s, %s", loaded_val, base_type, ptr1_type, ptr1_temp, get_alignment_str(base_type));
+                                
+                                strcat(final_args_str, base_type);
+                                strcat(final_args_str, " ");
+                                strcat(final_args_str, loaded_val);
+                                
+                                free(ptr2_val);
+                                free(ptr1_temp);
+                                free(loaded_val);
+                            } else {
+                                strcat(final_args_str, "i32 0");
+                            }
+                            free(arg_val);
+                        } else {
+                            // Single pointer dereference (handled above)
+                            free(arg_val);
+                            strcat(final_args_str, "i32 0");
+                        }
+                    }
+                    // Handle string/pointer types
+                    else if (handle_array_pointer_for_io(arg) && (strcmp(arg->datatype,"string")!=0)) {
+                        char* array_ptr_val = handle_array_pointer_for_io(arg);
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, array_ptr_val);
+                        if (array_ptr_val != arg_val) free(array_ptr_val);
+                        free(arg_val);
+                    }
+                    else if(strcmp(arg->datatype,"string")==0){
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, arg_val);
                     }
                     // Handle boolean types with special treatment
                     else if (arg_val[0] == '!') {
-                        if (strcmp(func_name, "cout") == 0) {
-                            // For cout, convert bool to string representation
-                            char* bool_str_var = generate_temp();
-                            emit_llvm_ir("  %s = select i1 %s, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.true, i64 0, i64 0), i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.false, i64 0, i64 0)",
-                                        bool_str_var, arg_val + 1);
-                            strcat(final_args_str, "i8* ");
-                            strcat(final_args_str, bool_str_var);
-                            free(bool_str_var);
-                        } else {
-                            // For cin, convert to i32 for scanf
-                            char* zext_temp = generate_temp();
-                            emit_llvm_ir("  %s = zext i1 %s to i32", zext_temp, arg_val + 1);
-                            strcat(final_args_str, "i32 ");
-                            strcat(final_args_str, zext_temp);
-                            free(zext_temp);
-                        }
+                        // For cout, convert bool to string representation
+                        char* bool_str_var = generate_temp();
+                        emit_llvm_ir("  %s = select i1 %s, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.true, i64 0, i64 0), i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.false, i64 0, i64 0)",
+                                    bool_str_var, arg_val + 1);
+                        strcat(final_args_str, "i8* ");
+                        strcat(final_args_str, bool_str_var);
+                        free(bool_str_var);
                         free(arg_val);
                     }
                     // Handle character types (promote to i32)
@@ -8515,32 +9929,11 @@ case NODE_CALL: {
                         free(zext_temp);
                         free(arg_val);
                     }
-                    // Handle regular types with potential conversion
+                    // Handle regular types
                     else {
-                        // For cin, we might need different handling for pointers
-                        if (strcmp(func_name, "cin") == 0 && arg->is_pointer) {
-                            // For cin with pointers, we need the address
-                            char* loaded_val = generate_temp();
-                            if (arg->type == NODE_IDENTIFIER) {
-                                SymbolEntry* symbol = find_symbol(arg->value);
-                                if (symbol && symbol->is_static) {
-                                    emit_llvm_ir("  %s = bitcast %s* @%s to i8*", loaded_val, arg_type, arg->value);
-                                } else {
-                                    emit_llvm_ir("  %s = bitcast %s* %%%s to i8*", loaded_val, arg_type, arg->value);
-                                }
-                                strcat(final_args_str, "i8* ");
-                                strcat(final_args_str, loaded_val);
-                                free(loaded_val);
-                            } else {
-                                strcat(final_args_str, arg_type);
-                                strcat(final_args_str, " ");
-                                strcat(final_args_str, arg_val);
-                            }
-                        } else {
-                            strcat(final_args_str, arg_type);
-                            strcat(final_args_str, " ");
-                            strcat(final_args_str, arg_val);
-                        }
+                        strcat(final_args_str, arg_type);
+                        strcat(final_args_str, " ");
+                        strcat(final_args_str, arg_val);
                         free(arg_val);
                     }
                 } else {
@@ -8548,103 +9941,26 @@ case NODE_CALL: {
                     strcat(final_args_str, arg_type);
                     strcat(final_args_str, " 0");
                 }
-
-                arg_index++;
-                arg = arg->next;
-            }
-        }
-
-        // Emit the call with proper function mapping
-        if (strcmp(func_name, "cout") == 0) {
-            emit_llvm_ir("  %s = call i32 (i8*, ...) @cout(%s)", result, final_args_str);
-        } else {
-            emit_llvm_ir("  %s = call i32 (i8*, ...) @cin(%s)", result, final_args_str);
-        }
-
-        free(format_str);
-        free(format_str_ptr);
-        return result;
-    }
-
-    // Handle arguments - build argument list properly with types (existing functionality)
-    char args_str[512] = "";
-    char typed_args_str[1024] = "";
-    int arg_count = 0;
-
-    if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
-        ASTNode* arg = args_node->child;
-        int first_arg = 1;
-
-        while (arg) {
-            if (!first_arg) {
-                strcat(args_str, ", ");
-                strcat(typed_args_str, ", ");
             }
 
-            char* arg_val = generate_llvm_ir_from_ast(arg);
-            char* arg_type = get_complete_llvm_type(arg);
-
-            if (arg_val) {
-                if (arg_val[0] == '!') {
-                    // Boolean argument - zext to i32 or use as i1
-                    if (strcmp(arg_type, "i1") == 0) {
-                        strcat(args_str, arg_val + 1); // Skip the '!' for direct i1
-                        strcat(typed_args_str, "i1 ");
-                        strcat(typed_args_str, arg_val + 1);
-                    } else {
-                        char* zext_temp = generate_temp();
-                        emit_llvm_ir("  %s = zext i1 %s to %s", zext_temp, arg_val + 1, arg_type);
-                        strcat(args_str, zext_temp);
-                        strcat(typed_args_str, arg_type);
-                        strcat(typed_args_str, " ");
-                        strcat(typed_args_str, zext_temp);
-                        free(zext_temp);
-                    }
-                } else {
-                    strcat(args_str, arg_val);
-                    strcat(typed_args_str, arg_type);
-                    strcat(typed_args_str, " ");
-                    strcat(typed_args_str, arg_val);
-                }
-                free(arg_val);
-            } else {
-                strcat(args_str, "0");
-                strcat(typed_args_str, arg_type);
-                strcat(typed_args_str, " 0");
-            }
-
-            first_arg = 0;
-            arg_count++;
+            arg_index++;
             arg = arg->next;
         }
     }
 
-    // Generate call instruction for other functions
-    if (strcmp(func_name, "printf") == 0 || strcmp(func_name, "scanf") == 0) {
-        // For printf/scanf, use varargs with i8* first parameter
-        char* result = generate_temp();
-
-        // Build proper argument string with explicit types
-        char final_args_str[1024] = "";
-
-        // For printf/scanf, use the original typed_args_str (they should already have types)
-        strcpy(final_args_str, typed_args_str);
-
-        // For printf/scanf with no arguments, we need to provide at least an empty format string
-        if (final_args_str[0] == '\0') {
-            // Create an empty string constant for the format string
-            char* empty_str_ptr = generate_temp();
-            emit_llvm_ir("  %s = getelementptr inbounds ([1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0)", empty_str_ptr);
-            emit_llvm_ir("  %s = call i32 (i8*, ...) @%s(i8* %s)", result, func_name, empty_str_ptr);
-            free(empty_str_ptr);
-        } else {
-            emit_llvm_ir("  %s = call i32 (i8*, ...) @%s(%s)", result, func_name, final_args_str);
-        }
-        return result;
+    // Emit the call with proper function mapping
+    if (strcmp(func_name, "cout") == 0) {
+        emit_llvm_ir("  %s = call i32 (i8*, ...) @cout(%s)", result, final_args_str);
+    } else {
+        emit_llvm_ir("  %s = call i32 (i8*, ...) @cin(%s)", result, final_args_str);
     }
-    // In the NODE_CALL case, replace the varargs section with this:
 
+    free(format_str);
+    free(format_str_ptr);
+    return strdup(result);
+}
     else if (is_varargs) {
+        
         // For user-defined varargs functions - build proper argument list
         char* result = generate_temp();
 
@@ -8698,95 +10014,245 @@ case NODE_CALL: {
         } else {
             emit_llvm_ir("  %s = call %s (i32, ...) @%s()", result, return_type, func_name);
         }
-        return result;
-    } else {
+        return strdup(result);
+    }
+
+    // Handle arguments - build argument list properly with types (existing functionality)
+    char args_str[512] = "";
+    char typed_args_str[1024] = "";
+    int arg_count = 0;
+
+    if (args_node && args_node->type == NODE_ARG_LIST && args_node->child) {
+        ASTNode* arg = args_node->child;
+        int first_arg = 1;
+
+        while (arg) {
+            if (!first_arg) {
+                strcat(args_str, ", ");
+                strcat(typed_args_str, ", ");
+            }
+            char* arg_type = get_complete_llvm_type(arg);
+            char* arg_val = generate_llvm_ir_from_ast(arg);
+
+            printf("call node arg type : %s , arg value %s \n",arg_type,arg_val);
+            
+
+            if (arg_val) {
+                if (arg_val[0] == '!') {
+                    // Boolean argument - zext to i32 or use as i1
+                    if (strcmp(arg_type, "i1") == 0) {
+                        strcat(args_str, arg_val + 1); // Skip the '!' for direct i1
+                        strcat(typed_args_str, "i1 ");
+                        strcat(typed_args_str, arg_val + 1);
+                    } else {
+                        char* zext_temp = generate_temp();
+                        emit_llvm_ir("  %s = zext i1 %s to %s", zext_temp, arg_val + 1, arg_type);
+                        strcat(args_str, zext_temp);
+                        strcat(typed_args_str, arg_type);
+                        strcat(typed_args_str, " ");
+                        strcat(typed_args_str, zext_temp);
+                        free(zext_temp);
+                    }
+                } else {
+                    strcat(args_str, arg_val);
+                    strcat(typed_args_str, arg_type);
+                    strcat(typed_args_str, " ");
+                    strcat(typed_args_str, arg_val);
+                }
+                free(arg_val);
+            } else {
+                strcat(args_str, "0");
+                strcat(typed_args_str, arg_type);
+                strcat(typed_args_str, " 0");
+            }
+
+            first_arg = 0;
+            arg_count++;
+            arg = arg->next;
+        }
+    }
+
+     
         // For regular functions (non-varargs)
         char* result = generate_temp();
+
+        printf("call node calling value: %s \n",result);
 
         if (typed_args_str[0] != '\0') {
             emit_llvm_ir("  %s = call %s @%s(%s)", result, return_type, func_name, typed_args_str);
         } else {
             emit_llvm_ir("  %s = call %s @%s()", result, return_type, func_name);
         }
-        return result;
-    }
+        return strdup(result);
+    
 }
 
 case NODE_SWITCH_STMT: {
-    // Structure: expression -> case_blocks
     ASTNode* expr_node = node->child;
     ASTNode* case_blocks_node = expr_node ? expr_node->next : NULL;
 
     if (!expr_node) return NULL;
 
-    // Generate the switch expression
-    char* switch_value = generate_llvm_ir_from_ast(expr_node);
-    if (!switch_value) return NULL;
+    // Generate the switch expression and ensure it's i32
+    char* switch_value_raw = generate_llvm_ir_from_ast(expr_node);
+    if (!switch_value_raw) return NULL;
+
+    // Convert switch value to i32 if needed (for char, short, etc.)
+    char* switch_value = switch_value_raw;
+    char* expr_type = get_complete_llvm_type(expr_node);
+    
+    if (strcmp(expr_type, "i8") == 0 || strcmp(expr_type, "i16") == 0) {
+        char* extended = generate_temp();
+        if (strcmp(expr_type, "i8") == 0) {
+            emit_llvm_ir("  %s = zext i8 %s to i32", extended, switch_value_raw);
+        } else {
+            emit_llvm_ir("  %s = zext i16 %s to i32", extended, switch_value_raw);
+        }
+        switch_value = extended;
+        free(switch_value_raw);
+    }
 
     char* end_switch = generate_label();
-    char* default_label = NULL;
+    char* default_label = generate_label(); // Always create default label
+    
+    // Store old break label and set new one for switch
+    char* old_break_label = current_break_label;
+    current_break_label = end_switch;
 
-    // Process case blocks
+    // First pass: collect all case values and generate labels
+    typedef struct {
+        char* value;
+        char* label;
+        ASTNode* body;
+    } CaseEntry;
+    
+    CaseEntry case_entries[100];
+    int case_count = 0;
+    char* actual_default_label = NULL;
+
     if (case_blocks_node && case_blocks_node->type == NODE_CASE_BLOCKS) {
         ASTNode* case_block = case_blocks_node->child;
-
+        
         while (case_block) {
             if (case_block->type == NODE_CASE_STMT) {
-                // CASE statement
                 ASTNode* case_expr = case_block->child;
                 ASTNode* case_body = case_expr ? case_expr->next : NULL;
-
+                
                 if (case_expr) {
-                    char* case_value = generate_llvm_ir_from_ast(case_expr);
-                    char* case_label = generate_label();
-
-                    // Compare switch value with case value
-                    char* cmp_temp = generate_temp();
-                    emit_llvm_ir("  %s = icmp eq i32 %s, %s", cmp_temp, switch_value, case_value);
-                    emit_llvm_ir("  br i1 %s, label %%%s, label %%next_case_%s",
-                                cmp_temp, case_label, case_label);
-
-                    // Case body
-                    emit_llvm_ir("%s:", case_label);
-                    if (case_body) {
-                        generate_llvm_ir_from_ast(case_body);
+                    char* case_value_raw = generate_llvm_ir_from_ast(case_expr);
+                    if (case_value_raw) {
+                        // Convert case value to i32 if needed
+                        char* case_value = case_value_raw;
+                        char* case_type = get_complete_llvm_type(case_expr);
+                        
+                        if (strcmp(case_type, "i8") == 0 || strcmp(case_type, "i16") == 0) {
+                            char* case_extended = generate_temp();
+                            if (strcmp(case_type, "i8") == 0) {
+                                emit_llvm_ir("  %s = zext i8 %s to i32", case_extended, case_value_raw);
+                            } else {
+                                emit_llvm_ir("  %s = zext i16 %s to i32", case_extended, case_value_raw);
+                            }
+                            case_value = case_extended;
+                            free(case_value_raw);
+                        }
+                        
+                        case_entries[case_count].value = strdup(case_value);
+                        case_entries[case_count].label = generate_label();
+                        case_entries[case_count].body = case_body;
+                        case_count++;
+                        
+                        if (case_value != case_value_raw) free(case_value);
                     }
-                    emit_llvm_ir("  br label %%%s", end_switch);
-
-                    emit_llvm_ir("next_case_%s:", case_label);
-
-                    free(case_value);
-                    free(case_label);
-                    free(cmp_temp);
                 }
             } else if (case_block->type == NODE_DEFAULT_STMT) {
-                // DEFAULT statement
-                ASTNode* default_body = case_block->child;
-                default_label = generate_label();
-
-                emit_llvm_ir("  br label %%%s", default_label);
-                emit_llvm_ir("%s:", default_label);
-
-                if (default_body) {
-                    generate_llvm_ir_from_ast(default_body);
-                }
-                emit_llvm_ir("  br label %%%s", end_switch);
+                actual_default_label = generate_label();
+                case_entries[case_count].value = NULL; // Mark as default
+                case_entries[case_count].label = actual_default_label;
+                case_entries[case_count].body = case_block->child;
+                case_count++;
             }
             case_block = case_block->next;
         }
     }
 
-    // If no default case, jump to end
-    if (!default_label) {
+    // Generate the switch instruction
+    if (case_count > 0) {
+        // Use LLVM's switch instruction for better code generation
+        char switch_str[2048] = "";
+        snprintf(switch_str, sizeof(switch_str), "  switch i32 %s, label %%%s [ ", 
+                switch_value, actual_default_label ? actual_default_label : default_label);
+        
+        // Add all case entries to switch
+        for (int i = 0; i < case_count; i++) {
+            if (case_entries[i].value) { // Skip default entry in switch table
+                char case_str[128];
+                snprintf(case_str, sizeof(case_str), "i32 %s, label %%%s ", 
+                        case_entries[i].value, case_entries[i].label);
+                if (strlen(switch_str) + strlen(case_str) < sizeof(switch_str) - 10) {
+                    strcat(switch_str, case_str);
+                }
+            }
+        }
+        strcat(switch_str, "]");
+        emit_llvm_ir("%s", switch_str);
+    } else {
+        // No cases, just jump to default
+        emit_llvm_ir("  br label %%%s", default_label);
+    }
+
+    // Second pass: generate case bodies
+    for (int i = 0; i < case_count; i++) {
+        emit_llvm_ir("%s:", case_entries[i].label);
+        
+        if (case_entries[i].body) {
+            generate_llvm_ir_from_ast(case_entries[i].body);
+        }
+        
+        // If case body doesn't end with break, fall through to next case
+        // In proper LLVM, we should handle fallthrough explicitly
+        // For now, always jump to end unless there's an explicit break
+        if (!case_entries[i].body || !ends_with_unconditional_branch(case_entries[i].body)) {
+            if (i < case_count - 1) {
+                // Fall through to next case
+                emit_llvm_ir("  br label %%%s", case_entries[i + 1].label);
+            } else {
+                // Last case falls through to default
+                emit_llvm_ir("  br label %%%s", actual_default_label ? actual_default_label : default_label);
+            }
+        }
+    }
+
+    // Generate default case if it exists
+    if (actual_default_label) {
+        emit_llvm_ir("%s:", actual_default_label);
+        if (case_entries[case_count-1].body) { // Default is always last in our array
+            generate_llvm_ir_from_ast(case_entries[case_count-1].body);
+        }
+        if (!case_entries[case_count-1].body || !ends_with_unconditional_branch(case_entries[case_count-1].body)) {
+            emit_llvm_ir("  br label %%%s", end_switch);
+        }
+    } else {
+        // Empty default case
+        emit_llvm_ir("%s:", default_label);
         emit_llvm_ir("  br label %%%s", end_switch);
     }
 
     // End of switch
     emit_llvm_ir("%s:", end_switch);
 
+    // Restore break label
+    current_break_label = old_break_label;
+
+    // Cleanup
     free(switch_value);
     free(end_switch);
-    if (default_label) free(default_label);
+    free(default_label);
+    if (actual_default_label) free(actual_default_label);
+    
+    for (int i = 0; i < case_count; i++) {
+        if (case_entries[i].value) free(case_entries[i].value);
+        free(case_entries[i].label);
+    }
 
     return NULL;
 }
@@ -9151,12 +10617,6 @@ case NODE_PROGRAM: {
 
 // Add these cases to the main switch statement in generate_llvm_ir_from_ast
 
-case NODE_VA_LIST_TYPE: {
-    // Handle va_list type declaration
-    char* va_list_name = generate_va_list_name();
-    emit_llvm_ir("  %s = alloca i8*, align 4", va_list_name);
-    return strdup(va_list_name);
-}
 
 case NODE_VA_LIST: {
     // This handles va_list variable declaration
@@ -9164,9 +10624,15 @@ case NODE_VA_LIST: {
 
     if (id_node && id_node->type == NODE_IDENTIFIER) {
         char* va_list_name = id_node->value;
+        char * llvm_type=get_complete_llvm_type(id_node);
+        char * base_llvm_type=llvm_type;
+        if (id_node->is_array){
+           base_llvm_type=get_llvm_base_type(id_node->datatype);
+        }
+
 
         // CORRECT: va_list is represented as i8* in LLVM IR
-        emit_llvm_ir("  %%%s = alloca i8*, align 4", va_list_name);
+        emit_llvm_ir("  %%%s = alloca i8*, %s", va_list_name,get_alignment_str(base_llvm_type));
 
         // Store in symbol table with proper type information
         add_symbol_with_type(va_list_name, 0, "va_list", 1, 1, NULL, 0, 0); // is_pointer=1, pointer_depth=1
@@ -9263,6 +10729,7 @@ case NODE_VA_ARG: {
         char* double_temp = generate_temp();
         emit_llvm_ir("  %s = va_arg i8** %%%s, double", double_temp, va_list_name);
         emit_llvm_ir("  %s = fptrunc double %s to float", result, double_temp);
+        free(double_temp);
     } else if (is_double) {
         emit_llvm_ir("  %s = va_arg i8** %%%s, double", result, va_list_name);
     } else if (is_char) {
@@ -9270,11 +10737,13 @@ case NODE_VA_ARG: {
         char* int_temp = generate_temp();
         emit_llvm_ir("  %s = va_arg i8** %%%s, i32", int_temp, va_list_name);
         emit_llvm_ir("  %s = trunc i32 %s to i8", result, int_temp);
+        free(int_temp);
     } else if (is_short) {
         // shorts are promoted to int in varargs
         char* int_temp = generate_temp();
         emit_llvm_ir("  %s = va_arg i8** %%%s, i32", int_temp, va_list_name);
         emit_llvm_ir("  %s = trunc i32 %s to i16", result, int_temp);
+        free(int_temp);
     } else if (is_long_long) {
         // long long is 64-bit
         emit_llvm_ir("  %s = va_arg i8** %%%s, i64", result, va_list_name);
@@ -9284,10 +10753,11 @@ case NODE_VA_ARG: {
         // Integer types (i32 for int, long, etc.)
         emit_llvm_ir("  %s = va_arg i8** %%%s, %s", result, va_list_name, llvm_type);
     }
+    
+    // Note: va_list_name, llvm_type, c_type are not dynamically allocated in this function
+    // and result is returned to the caller, so we don't need to free them.
 
-    printf("DEBUG: va_arg returned C type '%s' (LLVM type '%s') as temp '%s'\n",
-           c_type, llvm_type, result);
-    return result;
+    return strdup(result);
 }
 
 case NODE_VA_END: {
@@ -9359,6 +10829,10 @@ void generate_global_static_declaration(ASTNode* node) {
     char* var_name = NULL;
     char* init_value_str = NULL;
     char* llvm_type = "i32"; // Default type
+    char * base_llvm_type="i32";
+
+    
+
 
     // Extract variable name
     if (decl_node->type == NODE_IDENTIFIER) {
@@ -9374,6 +10848,12 @@ void generate_global_static_declaration(ASTNode* node) {
     // Determine LLVM type
     if (type_node && type_node->type == NODE_TYPE && type_node->value) {
         llvm_type = get_llvm_type_from_semantic_for_type(type_node->value);
+    }
+
+    base_llvm_type=strdup(llvm_type);
+
+    if(node->is_array){
+    base_llvm_type=get_llvm_base_type(node->datatype);
     }
 
     // Handle string type
@@ -9414,7 +10894,7 @@ void generate_global_static_declaration(ASTNode* node) {
         }
 
         // Emit the global declaration with alignment for MIPS
-        emit_llvm_ir("@%s = internal global %s %s, align 4", var_name, llvm_type, init_value_str);
+        emit_llvm_ir("@%s = internal global %s %s, %s", var_name, llvm_type, init_value_str,get_alignment_str(base_llvm_type));
     }
 
     // Add to symbol table as static with type information
@@ -9467,8 +10947,13 @@ void allocate_parameters(ASTNode* params_node) {
             if (param_name_node && param_name_node->value) {
                 char* param_name = param_name_node->value;
                 char* param_type = get_complete_llvm_type(param);
-                emit_llvm_ir("  %%%s = alloca %s", param_name, param_type);
-                emit_llvm_ir("  store %s %%%d, %s* %%%s", param_type, param_index, param_type, param_name);
+                char * base_type=strdup(param_type);
+                if(param->is_array){
+                    base_type=get_llvm_base_type(param->datatype);
+                }
+
+                emit_llvm_ir("  %%%s = alloca %s, %s", param_name, param_type,get_alignment_str(base_type));
+                emit_llvm_ir("  store %s %%%d, %s* %%%s, %s", param_type, param_index, param_type, param_name,get_alignment_str(base_type));
             }
         }
         param_index++;
@@ -9521,6 +11006,7 @@ int ends_with_unconditional_branch(ASTNode* node) {
     double fnum;
     struct ASTNode* ast;
 }
+
 /* ---------------- Tokens from lexer ---------------- */
 %token IF ELSE SWITCH CASE DEFAULT
 %token FOR WHILE DO
@@ -9563,6 +11049,8 @@ int ends_with_unconditional_branch(ASTNode* node) {
 %right QUESTION COLON
 %right ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN
 %right PIPE_ASSIGN AMP_ASSIGN XOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
+%left INC DEC  // Postfix increment/decrement
+%right PRE_INC PRE_DEC  // Prefix increment/decrement
 %left GREATER
 
 %type <ast> program element_list element declaration function_dec function_def
@@ -9575,7 +11063,7 @@ int ends_with_unconditional_branch(ASTNode* node) {
 %type <ast> lambda_params lambda_ret params_opt param_list_dec param_decl
 %type <ast> compound_stmt stmt_list statement case_blocks_opt case_blocks case_block
 %type <ast> for_init_opt expression_opt initializer init_list args_opt args_list literal srtuct_ident
-%type <ast> else_part init_list_items init_list_contents
+%type <ast> else_part init_list_items init_list_contents cast_expr
 
 %start program
 
@@ -9699,15 +11187,11 @@ declaration
         $$ = decl;
     }
     | TOK_VA_LIST IDENTIFIER SEMI {
-            //ASTNode *va_list_decl = create_ast_node(NODE_VA_LIST, line_val, NULL);
-            ASTNode *va_list_type = create_ast_node(NODE_VA_LIST, line_val, "va_list");
-            ASTNode *identifier = create_ast_node(NODE_IDENTIFIER, line_val, $2);
-
-           // ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
-            //ast_add_child(decl, va_list_type);
-            ast_add_child(va_list_type, identifier);
-            $$ = va_list_type;
-        }
+        ASTNode *va_list_type = create_ast_node(NODE_VA_LIST, line_val, "va_list");
+        ASTNode *identifier = create_ast_node(NODE_IDENTIFIER, line_val, $2);
+        ast_add_child(va_list_type, identifier);
+        $$ = va_list_type;
+    }
     | AUTO declarator ASSIGN expression SEMI {
         ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
         ASTNode *auto_type = create_ast_node(NODE_TYPE, line_val, "auto");
@@ -9730,6 +11214,23 @@ declaration
         ast_add_child(const_type, $2);
         ASTNode *assign = create_binary_node(NODE_ASSIGNMENT, line_val, "=", $3, $5);
         ast_add_child(decl, const_type);
+        ast_add_child(decl, assign);
+        $$ = decl;
+    }
+    | STATIC type declarator SEMI {
+        ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
+        ASTNode *static_type = create_ast_node(NODE_TYPE, line_val, "static");
+        ast_add_child(static_type, $2);
+        ast_add_child(decl, static_type);
+        ast_add_child(decl, $3);
+        $$ = decl;
+    }
+    | STATIC type declarator ASSIGN expression SEMI {
+        ASTNode *decl = create_ast_node(NODE_VARIABLE_DECL, line_val, NULL);
+        ASTNode *static_type = create_ast_node(NODE_TYPE, line_val, "static");
+        ast_add_child(static_type, $2);
+        ASTNode *assign = create_binary_node(NODE_ASSIGNMENT, line_val, "=", $3, $5);
+        ast_add_child(decl, static_type);
         ast_add_child(decl, assign);
         $$ = decl;
     }
@@ -9767,38 +11268,37 @@ declarator
     ;
 
 /* ---------------- Array initializer ---------------- */
-    initializer
-        : assignment_expr {$$ = $1;  }
-        | LBRACE init_list_contents RBRACE {
-            $$ = $2;
-          }
-        | LBRACE RBRACE {
-            $$ = create_ast_node(NODE_INIT_LIST, line_val, "empty");
-          }
-        ;
+initializer
+    : assignment_expr {$$ = $1;  }
+    | LBRACE init_list_contents RBRACE {
+        $$ = $2;
+      }
+    | LBRACE RBRACE {
+        $$ = create_ast_node(NODE_INIT_LIST, line_val, "empty");
+      }
+    ;
 
-    init_list_contents
-        : /* empty */ {
-            $$ = create_ast_node(NODE_INIT_LIST, line_val, NULL);
-          }
-        | init_list_items {
-            $$ = $1;
-          }
-        ;
+init_list_contents
+    : /* empty */ {
+        $$ = create_ast_node(NODE_INIT_LIST, line_val, NULL);
+      }
+    | init_list_items {
+        $$ = $1;
+      }
+    ;
 
-    init_list_items
-        : initializer {
-            $$ = create_ast_node(NODE_INIT_LIST, line_val, NULL);
-            ast_add_child($$, $1);
-          }
-        | init_list_items COMMA initializer {
-            ast_add_child($1, $3);
-            $$ = $1;
-          }
-        ;
+init_list_items
+    : initializer {
+        $$ = create_ast_node(NODE_INIT_LIST, line_val, NULL);
+        ast_add_child($$, $1);
+      }
+    | init_list_items COMMA initializer {
+        ast_add_child($1, $3);
+        $$ = $1;
+      }
+    ;
 
 /* ---------------- Types ---------------- */
-
 type
     : INT       { $$ = create_ast_node(NODE_TYPE, line_val, "int"); }
     | FLOAT     { $$ = create_ast_node(NODE_TYPE, line_val, "float"); }
@@ -9808,40 +11308,28 @@ type
     | VOID      { $$ = create_ast_node(NODE_TYPE, line_val, "void"); }
     | LONG      { $$ = create_ast_node(NODE_TYPE, line_val, "long");}
     | LONG LONG { $$ = create_ast_node(NODE_TYPE, line_val, "long long");}
-    | LONG DOUBLE { $$ = create_ast_node(NODE_TYPE, line_val, "long double");}
     | LONG INT  { $$ = create_ast_node(NODE_TYPE, line_val, "long int");}
-    | LONG  FLOAT { $$ = create_ast_node(NODE_TYPE, line_val, "long float");}
-    | CONST CHAR { $$ = create_ast_node(NODE_TYPE, line_val, "const char");}
-    | CONST STRING { $$ = create_ast_node(NODE_TYPE, line_val, "const string");}
-    | CONST INT    { $$ = create_ast_node(NODE_TYPE, line_val, "const int");}
-    | CONST FLOAT  { $$ = create_ast_node(NODE_TYPE, line_val, "const float");}
-    | CONST DOUBLE  { $$ = create_ast_node(NODE_TYPE, line_val, "const double");}
-    | CONST BOOL    { $$ = create_ast_node(NODE_TYPE, line_val, "const bool");}
-    | CONST SHORT   { $$ = create_ast_node(NODE_TYPE, line_val, "const short");}
-    | CONST LONG    { $$ = create_ast_node(NODE_TYPE, line_val, "const long");}
-    | STATIC INT    { $$ = create_ast_node(NODE_TYPE, line_val, "static int");}
-    | STATIC FLOAT  { $$ = create_ast_node(NODE_TYPE, line_val, "static float");}
-    | STATIC DOUBLE  { $$ = create_ast_node(NODE_TYPE, line_val, "static double");}
-    | STATIC BOOL    { $$ = create_ast_node(NODE_TYPE, line_val, "static bool");}
-    | STATIC SHORT   { $$ = create_ast_node(NODE_TYPE, line_val, "static short");}
-    | STATIC STRING  { $$ = create_ast_node(NODE_TYPE, line_val, "static string");}
-    | STATIC CHAR    { $$ = create_ast_node(NODE_TYPE, line_val, "static char");}
-    | STATIC LONG    { $$ = create_ast_node(NODE_TYPE, line_val, "static long");}
-    | UNSIGNED INT    { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned int");}
-    | UNSIGNED FLOAT  { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned float");}
-    | UNSIGNED DOUBLE  { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned double");}
-    | UNSIGNED CHAR    { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned char");}
-    | UNSIGNED LONG    { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned long");}
-
-
     | SHORT     { $$ = create_ast_node(NODE_TYPE, line_val, "short"); }
     | CONST     { $$ = create_ast_node(NODE_TYPE, line_val, "const"); }
     | STATIC    { $$ = create_ast_node(NODE_TYPE, line_val, "static"); }
     | UNSIGNED  { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned"); }
+    | UNSIGNED INT { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned int"); }
+    | UNSIGNED CHAR { $$ = create_ast_node(NODE_TYPE, line_val, "unsigned char"); }
     | AUTO      { $$ = create_ast_node(NODE_TYPE, line_val, "auto"); }
     | STRING    { $$ = create_ast_node(NODE_TYPE, line_val, "string"); }
     | IDENTIFIER { $$ = create_ast_node(NODE_TYPE, line_val, $1); }
+    | CONST INT {$$ = create_ast_node(NODE_TYPE, line_val, "const int");}
+    | CONST FLOAT {$$ = create_ast_node(NODE_TYPE, line_val, "const float");}
+    | CONST DOUBLE{$$ = create_ast_node(NODE_TYPE, line_val, "const double");}
+    | CONST CHAR {$$ = create_ast_node(NODE_TYPE, line_val, "const char");}
+    | CONST LONG {$$ = create_ast_node(NODE_TYPE, line_val, "const long");}
+
+    | STATIC INT {$$ = create_ast_node(NODE_TYPE, line_val, "static int");}
+    | STATIC FLOAT {$$ = create_ast_node(NODE_TYPE, line_val, "static float");}
+    | STATIC DOUBLE {$$ = create_ast_node(NODE_TYPE, line_val, "static double");}
+    
     ;
+
 /* ---------------- Functions ---------------- */
 function_dec
     : type declarator LPAREN params_opt RPAREN SEMI {
@@ -9896,8 +11384,8 @@ param_list_dec
       }
     | param_list_dec COMMA ELLIPSIS {
         ASTNode *ellipsis = create_ast_node(NODE_ELLIPSIS, line_val, "...");
-    ast_add_child($1, ellipsis);
-    $$ = $1;
+        ast_add_child($1, ellipsis);
+        $$ = $1;
       }
     | ELLIPSIS {
         $$ = create_ast_node(NODE_PARAM_LIST, line_val, NULL);
@@ -9940,6 +11428,7 @@ param_decl
         $$ = param;
       }
     ;
+
 /* ---------------- Compound statements ---------------- */
 compound_stmt
     : LBRACE stmt_list RBRACE {
@@ -10057,25 +11546,25 @@ statement
     | BREAK SEMI { $$ = create_ast_node(NODE_BREAK_STMT, line_val, NULL); }
     | CONTINUE SEMI { $$ = create_ast_node(NODE_CONTINUE_STMT, line_val, NULL); }
     | GOTO IDENTIFIER SEMI {
-        $$ = create_ast_node(NODE_IDENTIFIER, line_val, $2);
+        $$ = create_ast_node(NODE_GOTO_STMT, line_val, $2);
       }
-     | TOK_VA_START LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMI {
-         ASTNode *va_start = create_ast_node(NODE_VA_START, line_val, NULL);
-         ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
-         ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $5));  // last_param
-         $$ = va_start;
-     }
-     | TOK_VA_ARG LPAREN IDENTIFIER COMMA type RPAREN SEMI {
-         ASTNode *va_arg = create_ast_node(NODE_VA_ARG, line_val, NULL);
-         ast_add_child(va_arg, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
-         ast_add_child(va_arg, $5);  // type
-         $$ = va_arg;
-     }
-     | TOK_VA_END LPAREN IDENTIFIER RPAREN SEMI {
-         ASTNode *va_end = create_ast_node(NODE_VA_END, line_val, NULL);
-         ast_add_child(va_end, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
-         $$ = va_end;
-     }
+    | TOK_VA_START LPAREN IDENTIFIER COMMA IDENTIFIER RPAREN SEMI {
+        ASTNode *va_start = create_ast_node(NODE_VA_START, line_val, NULL);
+        ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+        ast_add_child(va_start, create_ast_node(NODE_IDENTIFIER, line_val, $5));  // last_param
+        $$ = va_start;
+    }
+    | TOK_VA_ARG LPAREN IDENTIFIER COMMA type RPAREN SEMI {
+        ASTNode *va_arg = create_ast_node(NODE_VA_ARG, line_val, NULL);
+        ast_add_child(va_arg, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+        ast_add_child(va_arg, $5);  // type
+        $$ = va_arg;
+    }
+    | TOK_VA_END LPAREN IDENTIFIER RPAREN SEMI {
+        ASTNode *va_end = create_ast_node(NODE_VA_END, line_val, NULL);
+        ast_add_child(va_end, create_ast_node(NODE_IDENTIFIER, line_val, $3));  // va_list
+        $$ = va_end;
+    }
     | SEMI { $$ = create_ast_node(NODE_EMPTY, line_val, "empty_stmt"); }
     | error SEMI { yyerrok; $$ = create_ast_node(NODE_EMPTY, line_val, "error_recovery"); }
     ;
@@ -10257,25 +11746,40 @@ additive_expr
     ;
 
 multiplicative_expr
-    : unary_expr { $$ = $1; }
-    | multiplicative_expr MUL unary_expr {
+    : cast_expr { $$ = $1; }
+    | multiplicative_expr MUL cast_expr {
         $$ = create_binary_node(NODE_BINARY_OP, line_val, "*", $1, $3);
     }
-    | multiplicative_expr DIV unary_expr {
+    | multiplicative_expr DIV cast_expr {
         $$ = create_binary_node(NODE_BINARY_OP, line_val, "/", $1, $3);
     }
-    | multiplicative_expr MOD unary_expr {
+    | multiplicative_expr MOD cast_expr {
         $$ = create_binary_node(NODE_BINARY_OP, line_val, "%", $1, $3);
     }
     ;
 
+cast_expr
+    : unary_expr { $$ = $1; }
+    | LPAREN type RPAREN cast_expr {
+        ASTNode *cast = create_ast_node(NODE_CAST_EXPR, line_val, NULL);
+        ast_add_child(cast, $2);  // target type
+        ast_add_child(cast, $4);  // expression to cast
+        $$ = cast;
+    }
+    ;
+
+/* FIXED: Proper prefix/postfix increment/decrement handling */
 unary_expr
     : postfix_expr { $$ = $1; }
-    | INC unary_expr {
-        $$ = create_unary_node(NODE_UNARY_OP, line_val, "++", $2);
+    | INC unary_expr %prec PRE_INC {
+        ASTNode *node = create_unary_node(NODE_UNARY_OP, line_val, "++", $2);
+        node->is_postfix = false;  // Prefix increment
+        $$ = node;
     }
-    | DEC unary_expr {
-        $$ = create_unary_node(NODE_UNARY_OP, line_val, "--", $2);
+    | DEC unary_expr %prec PRE_DEC {
+        ASTNode *node = create_unary_node(NODE_UNARY_OP, line_val, "--", $2);
+        node->is_postfix = false;  // Prefix decrement
+        $$ = node;
     }
     | PLUS unary_expr {
         $$ = create_unary_node(NODE_UNARY_OP, line_val, "+", $2);
@@ -10294,6 +11798,7 @@ unary_expr
     }
     ;
 
+/* FIXED: Proper postfix increment/decrement */
 postfix_expr
     : primary_expr { $$ = $1; }
     | postfix_expr LPAREN args_opt RPAREN {
@@ -10320,14 +11825,15 @@ postfix_expr
         ast_add_child(member, create_ast_node(NODE_IDENTIFIER, line_val, $3));
         $$ = member;
     }
-    | postfix_expr SHL expression {
-        $$ = create_binary_node(NODE_BINARY_OP, line_val, "<<", $1, $3);
-    }
     | postfix_expr INC {
-        $$ = create_unary_node(NODE_UNARY_OP, line_val, "++", $1);
+        ASTNode *node = create_unary_node(NODE_UNARY_OP, line_val, "++", $1);
+        node->is_postfix = true;  // Postfix increment
+        $$ = node;
     }
     | postfix_expr DEC {
-        $$ = create_unary_node(NODE_UNARY_OP, line_val, "--", $1);
+        ASTNode *node = create_unary_node(NODE_UNARY_OP, line_val, "--", $1);
+        node->is_postfix = true;  // Postfix decrement
+        $$ = node;
     }
     ;
 
